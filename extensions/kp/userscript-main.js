@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
 // @name         CRM Create v11.1 Latest (UI Replace)412412
 // @namespace    kp-lead-centre-ui
-// @version      1.0.1346
+// @version      1.0.1349
 // @description  Полная замена внешнего вида страницы создания заявки
 // @match        https://kp-lead-centre.ru/admin/domain/customer-request/create*
 // @match        https://kp-lead-centre.ru/admin/domain/customer-request/update*
@@ -2970,14 +2970,44 @@ function tmBulkCityOptions(){
   }catch(_){}
   return out;
 }
-function tmBulkNorm(s){return String(s||'').toLowerCase().replace(/ё/g,'е').replace(/\s+/g,' ').trim();}
+function tmBulkNorm(s){return String(s||'').toLowerCase().replace(/ё/g,'е').replace(/[-–—]/g,' ').replace(/\s+/g,' ').trim();}
+function tmBulkCityBase(t){return String(t||'').replace(/\s*\([^)]*\)\s*$/,'').trim();} // город без хвостовой «(суффикс)»
+function tmMatchCityOption(cand,opts){
+  var cn=tmBulkNorm(cand);if(!cn)return null;
+  // сначала ПОЛНОЕ совпадение (город со своим суффиксом «(МСК)»/«(Ярославль)»),
+  for(var i=0;i<opts.length;i++){if(tmBulkNorm(opts[i].t)===cn)return opts[i];}
+  // затем по БАЗЕ (во вводе город БЕЗ его справочного суффикса: «Рыбинск»→«Рыбинск (Ярославль)»).
+  for(var j=0;j<opts.length;j++){var b=tmBulkNorm(tmBulkCityBase(opts[j].t));if(b&&b===cn)return opts[j];}
+  return null;
+}
+function tmWordMatchCity(str,opts){
+  var words=String(str||'').split(/\s+/).filter(Boolean);
+  for(var n=Math.min(words.length,5);n>=1;n--){
+    var hit=tmMatchCityOption(words.slice(0,n).join(' '),opts);
+    if(hit){var rest=words.slice(n).join(' ').replace(/[()]/g,' ').replace(/\s+/g,' ').trim();return {opt:hit,rest:rest};}
+  }
+  return null;
+}
 function tmParseLeafletCityDesc(raw){
   raw=String(raw||'').trim();
-  var pi=raw.indexOf('(');
-  if(pi>=0){var city=raw.slice(0,pi).trim();var desc=raw.slice(pi).replace(/[()]/g,' ').replace(/\s+/g,' ').trim();return {city:city,desc:desc};}
-  var opts=tmBulkCityOptions();var rn=tmBulkNorm(raw);var best=null;
-  opts.forEach(function(o){var on=tmBulkNorm(o.t);if(on&&rn.indexOf(on)===0){if(!best||on.length>tmBulkNorm(best.t).length)best=o;}});
-  if(best){var descRaw=raw.slice(best.t.length).trim().replace(/[()]/g,' ').replace(/\s+/g,' ').trim();return {city:best.t,desc:descRaw,cityId:best.v};}
+  var opts=tmBulkCityOptions();
+  // 0) Весь текст — ГОРОД целиком (город со скобкой-суффиксом «(МСК)»/«(Ярославль)», листовки нет).
+  var whole=tmMatchCityOption(raw,opts);
+  if(whole)return {city:whole.t,desc:'',cityId:whole.v};
+  // 1) Хвостовая «(...)» = ЛИСТОВКА, остальное = город (город сам может нести суффикс «(МСК)»).
+  //    «Одинцово (МСК)(Расклейка Михаил)» → город «Одинцово (МСК)», листовка «Расклейка Михаил».
+  //    «Рыбинск (Мастер Павел)» → база «Рыбинск» → город «Рыбинск (Ярославль)», листовка «Мастер Павел».
+  var m=raw.match(/^(.*?)\s*\(([^()]*)\)\s*$/);
+  if(m){
+    var cityCand=m[1].trim(),leaflet=m[2].trim();
+    var hit=tmMatchCityOption(cityCand,opts);
+    if(hit)return {city:hit.t,desc:leaflet,cityId:hit.v};
+    var w1=tmWordMatchCity(cityCand,opts);
+    if(w1)return {city:w1.opt.t,desc:(w1.rest?(w1.rest+' '+leaflet).trim():leaflet),cityId:w1.opt.v};
+  }
+  // 2) Без хвостовой скобки: сматчить город как первые N слов, остальное — листовка («Йошкар Ола Визитка Михаил»).
+  var w=tmWordMatchCity(raw,opts);
+  if(w)return {city:w.opt.t,desc:w.rest,cityId:w.opt.v};
   return {city:raw,desc:''};
 }
 function tmBulkKickCityTime(cityVal){
@@ -3051,10 +3081,14 @@ function tmApplyBulkLeafletAdv(desc){
     var sel=tmBulkBridgeSelect('customerrequest-advert_id');
     var mn=tmBulkNorm(desc);var matched=null;
     if(sel&&sel.options)for(var i=0;i<sel.options.length;i++){var t=String(sel.options[i].text||'').trim();if(t&&tmBulkNorm(t)===mn){matched=sel.options[i];break;}}
-    ai.value=matched?String(matched.text||'').trim():String(desc||'');
-    if(sel&&matched){sel.value=matched.value;try{sel.dispatchEvent(new Event('change',{bubbles:true}));}catch(_){}}
-    var pi=document.getElementById('partnerInput');if(pi&&typeof tmSetCreateSourceMutualLock==='function')tmSetCreateSourceMutualLock(pi,true);
-    if(!matched&&desc&&typeof showToast==='function'){try{showToast('Листовка «'+desc+'» не найдена');}catch(_){}}
+    if(matched){
+      ai.value=String(matched.text||'').trim();
+      if(sel){sel.value=matched.value;try{sel.dispatchEvent(new Event('change',{bubbles:true}));}catch(_){}}
+      var pi=document.getElementById('partnerInput');if(pi&&typeof tmSetCreateSourceMutualLock==='function')tmSetCreateSourceMutualLock(pi,true);
+    } else if(desc&&typeof showToast==='function'){
+      // Точной листовки в справочнике НЕТ — в поле НЕ вписываем, только уведомляем.
+      try{showToast('Листовка «'+desc+'» не найдена');}catch(_){}
+    }
   }catch(_){}
 }
 function tmApplyBulkSourceToCreate(){

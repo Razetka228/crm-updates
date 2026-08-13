@@ -208,7 +208,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (rec.city) await sendClear(rec.city, rec.requestId, "close");
   });
 })();
-
 /* ============================================================
  * АВТО-ОБНОВЛЕНИЕ РАСШИРЕНИЯ С GITHUB (self-reload)
  * Фоновая PowerShell-задача обновляет ФАЙЛЫ расширения на диске с GitHub.
