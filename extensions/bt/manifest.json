@@ -1,0 +1,133 @@
+{
+  "manifest_version": 3,
+  "name": "CRM Create v11.1 + v8 (БТ)",
+  "version": "1.0.1398",
+  "description": "CRM UI replacement (create/update v11.1) + CRM v8 Live Redesign (index), converted from Tampermonkey scripts.",
+  "permissions": [
+    "clipboardWrite",
+    "storage",
+    "webNavigation",
+    "alarms"
+  ],
+  "host_permissions": [
+    "https://bt-lead-centre.ru/*",
+    "https://htmlweb.ru/*",
+    "https://mnc-lead-centre.ru/*",
+    "http://127.0.0.1/*",
+    "https://raw.githubusercontent.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "CRM Create v11.1"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://bt-lead-centre.ru/admin/domain*"
+      ],
+      "js": [
+        "theme-boot.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": true,
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://bt-lead-centre.ru/admin/domain*"
+      ],
+      "js": [
+        "bs-select-guard.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": true,
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://bt-lead-centre.ru/admin/domain/customer-request/create*",
+        "https://bt-lead-centre.ru/admin/domain/customer-request/update*",
+        "https://bt-lead-centre.ru/admin/domain/customer/update*"
+      ],
+      "exclude_matches": [
+        "https://bt-lead-centre.ru/admin/domain/customer-request/create-claim*"
+      ],
+      "css": [
+        "boot.css"
+      ],
+      "run_at": "document_start",
+      "all_frames": true
+    },
+    {
+      "matches": [
+        "https://bt-lead-centre.ru/admin/domain/customer-request/create*",
+        "https://bt-lead-centre.ru/admin/domain/customer-request/update*",
+        "https://bt-lead-centre.ru/admin/domain/customer/update*"
+      ],
+      "exclude_matches": [
+        "https://bt-lead-centre.ru/admin/domain/customer-request/create-claim*"
+      ],
+      "js": [
+        "bridge.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": true
+    },
+    {
+      "matches": [
+        "https://bt-lead-centre.ru/admin/domain/customer-request/create*",
+        "https://bt-lead-centre.ru/admin/domain/customer-request/update*",
+        "https://bt-lead-centre.ru/admin/domain/customer/update*"
+      ],
+      "exclude_matches": [
+        "https://bt-lead-centre.ru/admin/domain/customer-request/create-claim*"
+      ],
+      "js": [
+        "main-shim.js",
+        "userscript-main.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": true,
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://bt-lead-centre.ru/admin/domain/customer-request/index*",
+        "https://bt-lead-centre.ru/admin/domain/customer-request/create*",
+        "https://bt-lead-centre.ru/admin/domain/customer-request/update*"
+      ],
+      "js": [
+        "v8-gm-shim.js",
+        "v8-content.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": false,
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://bt-lead-centre.ru/admin/domain/customer-request/index*"
+      ],
+      "css": [
+        "v8-boot.css"
+      ],
+      "js": [
+        "v8-boot.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": false
+    },
+    {
+      "matches": [
+        "https://bt-lead-centre.ru/admin/domain/customer-request/update*"
+      ],
+      "js": [
+        "clear-on-close.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": false
+    }
+  ]
+}
