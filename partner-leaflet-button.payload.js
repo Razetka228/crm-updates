@@ -309,8 +309,7 @@
         }
 
         const button = createSourceButton(sourceButton);
-        const leftButton = createLeftSourceButton(sourceButton);
-        const buttons = [leftButton, button].filter(Boolean);
+        const buttons = [button];
         buttons.forEach(function(b) {
             setButtonState(b, 'Определяю источник...', 'Определяю источник заявки');
         });
