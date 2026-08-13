@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Кнопка партнера или листовки
 // @namespace    http://tampermonkey.net/
-// @version      1.0.4
+// @version      1.0.5
 // @description  Добавляет на странице клиента кнопку рядом с "Добавить заявку" и показывает партнера или листовку по параметрам ссылки
 // @author       GPT-5.4
 // @match        https://kp-lead-centre.ru/admin/domain/customer/update?id*
@@ -15,6 +15,7 @@
     'use strict';
 
     const BUTTON_ID = 'tm-customer-source-button';
+    const LEFT_BUTTON_ID = 'tm-customer-source-button-left';
     const WRAPPER_ID = 'tm-customer-source-button-wrap';
     const STYLE_ID = 'tm-customer-source-button-style';
     const CACHE_KEY = 'tm-customer-source-reference-v1';
@@ -37,10 +38,10 @@
         const style = document.createElement('style');
         style.id = STYLE_ID;
         style.textContent = `
-            #${BUTTON_ID},
-            #${BUTTON_ID}:hover,
-            #${BUTTON_ID}:active,
-            #${BUTTON_ID}:focus {
+            #${BUTTON_ID}, #${LEFT_BUTTON_ID},
+            #${BUTTON_ID}:hover, #${LEFT_BUTTON_ID}:hover,
+            #${BUTTON_ID}:active, #${LEFT_BUTTON_ID}:active,
+            #${BUTTON_ID}:focus, #${LEFT_BUTTON_ID}:focus {
                 transform: none !important;
                 transition: none !important;
                 animation: none !important;
@@ -267,6 +268,38 @@
         return button;
     }
 
+    function createLeftSourceButton(sourceButton) {
+        const existing = document.getElementById(LEFT_BUTTON_ID);
+        if (existing) {
+            return existing;
+        }
+
+        const wrapper = document.getElementById(WRAPPER_ID);
+        if (!wrapper) {
+            return null;
+        }
+
+        const tagName = sourceButton.tagName.toLowerCase() === 'a' ? 'a' : 'button';
+        const button = document.createElement(tagName);
+        button.id = LEFT_BUTTON_ID;
+        button.className = sourceButton.className;
+        button.style.marginRight = '0';
+        button.style.whiteSpace = 'nowrap';
+        button.style.maxWidth = '360px';
+        button.style.overflow = 'hidden';
+        button.style.textOverflow = 'ellipsis';
+
+        if (tagName === 'a') {
+            button.href = 'javascript:void(0)';
+        } else {
+            button.type = 'button';
+        }
+
+        wrapper.insertBefore(button, wrapper.firstChild);
+        lockVisualState(button, sourceButton);
+        return button;
+    }
+
     function setButtonState(button, text, title) {
         button.textContent = text;
         button.title = title || text;
@@ -284,27 +317,35 @@
         }
 
         const button = createSourceButton(sourceButton);
-        setButtonState(button, 'Определяю источник...', 'Определяю источник заявки');
+        const leftButton = createLeftSourceButton(sourceButton);
+        const buttons = [leftButton, button].filter(Boolean);
+        buttons.forEach(function(b) {
+            setButtonState(b, 'Определяю источник...', 'Определяю источник заявки');
+        });
 
         try {
             const referenceData = await fetchReferenceData();
             const info = buildSourceInfo(referenceData);
 
             if (!info) {
-                button.remove();
+                buttons.forEach(function(b) { b.remove(); });
                 return true;
             }
 
-            setButtonState(button, info.text, info.fullText);
-            button.onclick = function(event) {
-                event.preventDefault();
-                copyText(info.copyText);
-            };
+            buttons.forEach(function(b) {
+                setButtonState(b, info.text, info.fullText);
+                b.onclick = function(event) {
+                    event.preventDefault();
+                    copyText(info.copyText);
+                };
+            });
         } catch (error) {
-            setButtonState(button, 'Источник не найден', String(error && error.message ? error.message : error));
-            button.onclick = function(event) {
-                event.preventDefault();
-            };
+            buttons.forEach(function(b) {
+                setButtonState(b, 'Источник не найден', String(error && error.message ? error.message : error));
+                b.onclick = function(event) {
+                    event.preventDefault();
+                };
+            });
             console.error('[TM] Ошибка определения источника:', error);
         }
 
