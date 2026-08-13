@@ -1,8 +1,8 @@
 @echo off
-title CRM: avto-obnovlenie KP
+title CRM: vklyuchit avto-obnovlenie KP
 echo.
 echo   ============================================================
-echo     Stavlyu avto-obnovlenie rasshireniya KP s GitHub.
+echo     Vklyuchayu avto-obnovlenie rasshireniya KP s GitHub.
 echo     Zapustit ODIN raz na etom kompyutere. Podozhdite...
 echo   ============================================================
 echo.

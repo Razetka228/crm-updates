@@ -1,8 +1,8 @@
 @echo off
-title CRM: avto-obnovlenie BT + MNC
+title CRM: vklyuchit avto-obnovlenie BT + MNC
 echo.
 echo   ============================================================
-echo     Stavlyu avto-obnovlenie rasshireniy BT i MNC s GitHub.
+echo     Vklyuchayu avto-obnovlenie rasshireniy BT i MNC s GitHub.
 echo     Zapustit ODIN raz na etom kompyutere. Podozhdite...
 echo   ============================================================
 echo.
