@@ -262,3 +262,5 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     checkForUpdate();
   } catch (e) { console.warn("[ext-updater] init error", e); }
 })();
+
+console.log("[CRM ext] service worker versiya " + chrome.runtime.getManifest().version + " zapushchen (auto-update OK)");
