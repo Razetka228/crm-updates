@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
 // @name         Фикс базы + ахк
 // @namespace    http://tampermonkey.net/
-// @version      28.6
+// @version      28.7
 // @description  ОБЪЕДИНЕННЫЙ СКРИПТ: + Фикс кнопки "Применить фильтр" + Кастомное меню услуг + Логика кнопок (create/update)
 // @author       кто прочитатет тот умрет
 // @match        https://kp-lead-centre.ru/admin/domain/customer-request/update*
