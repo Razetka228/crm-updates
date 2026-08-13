@@ -30,8 +30,15 @@ Write-Host ("Updater saved: " + $UpdaterPath)
 Write-Host ("Initial sync done. Extension folder: " + $ExtDir)
 
 # 3) register the scheduled task (every N minutes, current user)
-$tr = 'powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $UpdaterPath + '"'
-schtasks /Create /TN $TaskName /TR $tr /SC MINUTE /MO $IntervalMin /F | Out-Null
+# Use Register-ScheduledTask (not schtasks.exe) so a path with spaces is handled correctly.
+$psExe   = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+$psArg   = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $UpdaterPath + '"'
+$startAt = (Get-Date).AddMinutes(1)
+$action  = New-ScheduledTaskAction -Execute $psExe -Argument $psArg
+$trigger = New-ScheduledTaskTrigger -Once -At $startAt
+$trigger.Repetition = (New-ScheduledTaskTrigger -Once -At $startAt -RepetitionInterval (New-TimeSpan -Minutes $IntervalMin)).Repetition
+$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew
+Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings -Force | Out-Null
 Write-Host ("Scheduled task registered: '" + $TaskName + "' every " + $IntervalMin + " min")
 
 Write-Host ""
