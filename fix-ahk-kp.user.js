@@ -1,3 +1,35 @@
+﻿// ==UserScript==
+// @name         Фикс базы + ахк
+// @namespace    http://tampermonkey.net/
+// @version      28.5
+// @description  ОБЪЕДИНЕННЫЙ СКРИПТ: + Фикс кнопки "Применить фильтр" + Кастомное меню услуг + Логика кнопок (create/update)
+// @author       кто прочитатет тот умрет
+// @match        https://kp-lead-centre.ru/admin/domain/customer-request/update*
+// @match        https://kp-lead-centre.ru/admin/domain/customer-request/create*
+// @match        https://kp-lead-centre.ru/admin/domain/customer/update*
+// @match        https://kp-lead-centre.ru/admin/domain*
+// @match        https://yandex.ru/maps/*
+// @include      /^https:\/\/([a-z0-9-]+\.)*yandex\.[a-z.]+\/maps/
+// @match        https://kp-lead-centre.ru/admin/domain/request-audit/update*
+// @match        https://kp-lead-centre.ru/admin/domain/request-audit/index*
+// @match        https://kp-lead-centre.ru/admin/domain/customer-request/index*
+// @grant        GM_addStyle
+// @grant        GM_setClipboard
+// @grant        GM_setValue
+// @grant        GM_getValue
+// @grant        GM_addValueChangeListener
+// @grant        GM_xmlhttpRequest
+// @grant        GM_openInTab
+// @grant        unsafeWindow
+// @connect      nominatim.openstreetmap.org
+// @connect      num.voxlink.ru
+// @connect      htmlweb.ru
+// @connect      127.0.0.1
+// @connect      localhost
+// @run-at       document-start
+// @updateURL    https://raw.githubusercontent.com/Razetka228/crm-updates/main/fix-ahk-kp.user.js
+// @downloadURL  https://raw.githubusercontent.com/Razetka228/crm-updates/main/fix-ahk-kp.user.js
+// ==/UserScript==
 (function() {
     'use strict';
     console.log('🚀 CRM Lead Centre - МЕГА-ОБЪЕДИНЕННАЯ ВЕРСИЯ 28.0');
