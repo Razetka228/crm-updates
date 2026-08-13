@@ -1,0 +1,34 @@
+html:not([data-crm-v11-boot-released="1"]),
+html:not([data-crm-v11-boot-released="1"]) body {
+  min-height: 100% !important;
+  background: #ECEBE7 !important;
+}
+
+html:not([data-crm-v11-boot-released="1"]) body {
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+html:not([data-crm-v11-boot-released="1"]) body * {
+  animation-play-state: paused !important;
+  transition: none !important;
+}
+
+html:not([data-crm-v11-boot-released="1"])::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 2147483646;
+  background: #ECEBE7;
+  pointer-events: auto;
+}
+
+/* Тёмная тема: класс tm-v11-dark ставит ранний JS на document_start — красим boot в тёмный, иначе светит #ECEBE7. */
+html.tm-v11-dark:not([data-crm-v11-boot-released="1"]),
+html.tm-v11-dark:not([data-crm-v11-boot-released="1"]) body {
+  background: #141413 !important;
+}
+
+html.tm-v11-dark:not([data-crm-v11-boot-released="1"])::before {
+  background: #141413;
+}
