@@ -12,6 +12,8 @@ $Base        = Join-Path $env:LOCALAPPDATA 'crm-ext'
 $ExtDir      = Join-Path $Base 'kp'
 $UpdaterPath = Join-Path $Base 'kp-updater.ps1'
 $UpdaterUrl  = 'https://raw.githubusercontent.com/Razetka228/crm-updates/main/extensions/tools/kp-updater.ps1'
+$VbsPath     = Join-Path $Base 'kp-run-hidden.vbs'
+$VbsUrl      = 'https://raw.githubusercontent.com/Razetka228/crm-updates/main/extensions/tools/kp-run-hidden.vbs'
 $TaskName    = 'CRM Ext Auto-Update KP'
 $IntervalMin = 3
 
@@ -25,16 +27,21 @@ Invoke-WebRequest -Uri $u -OutFile $UpdaterPath -UseBasicParsing -TimeoutSec 60
 try { Unblock-File -Path $UpdaterPath } catch {}
 Write-Host ("Updater saved: " + $UpdaterPath)
 
+# 1b) get the hidden VBS launcher (prevents a PowerShell window from flashing every run)
+$uv = $VbsUrl + '?_=' + [DateTimeOffset]::Now.ToUnixTimeSeconds()
+Invoke-WebRequest -Uri $uv -OutFile $VbsPath -UseBasicParsing -TimeoutSec 60
+try { Unblock-File -Path $VbsPath } catch {}
+
 # 2) initial sync (populate the extension folder now)
 & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $UpdaterPath
 Write-Host ("Initial sync done. Extension folder: " + $ExtDir)
 
 # 3) register the scheduled task (every N minutes, current user)
-# Use Register-ScheduledTask (not schtasks.exe) so a path with spaces is handled correctly.
-$psExe   = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-$psArg   = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $UpdaterPath + '"'
+# Run through wscript + hidden VBS so NO PowerShell window ever appears.
+# Register-ScheduledTask (not schtasks.exe) handles paths with spaces correctly.
+$wscript = Join-Path $env:SystemRoot 'System32\wscript.exe'
 $startAt = (Get-Date).AddMinutes(1)
-$action  = New-ScheduledTaskAction -Execute $psExe -Argument $psArg
+$action  = New-ScheduledTaskAction -Execute $wscript -Argument ('"' + $VbsPath + '"')
 $trigger = New-ScheduledTaskTrigger -Once -At $startAt
 $trigger.Repetition = (New-ScheduledTaskTrigger -Once -At $startAt -RepetitionInterval (New-TimeSpan -Minutes $IntervalMin)).Repetition
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew
