@@ -11,6 +11,8 @@
 // @grant        GM_setValue
 // @connect      raw.githubusercontent.com
 // @run-at       document-start
+// @updateURL    https://raw.githubusercontent.com/Razetka228/crm-updates/main/partner-leaflet-button.loader.user.js
+// @downloadURL  https://raw.githubusercontent.com/Razetka228/crm-updates/main/partner-leaflet-button.loader.user.js
 // ==/UserScript==
 
 (function() {
