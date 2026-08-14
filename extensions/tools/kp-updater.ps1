@@ -58,5 +58,9 @@ try {
     Copy-Item (Join-Path $src 'manifest.json') -Destination (Join-Path $ExtDir 'manifest.json') -Force
 }
 finally {
-    Remove-Item -Path $tmp -Recurse -Force -ErrorAction SilentlyContinue
+    try {
+        if ($tmp -and (Test-Path -LiteralPath $tmp)) {
+            Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    } catch { }
 }

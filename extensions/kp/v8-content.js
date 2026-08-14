@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
 // @name         KP Lead Centre CRM v8 (Live Redesign) до расширения 12124142
 // @namespace    https://kp-lead-centre.ru/
-// @version      3.1.107
+// @version      3.1.108
 // @description  Интерфейс crm_v8.html с живыми данными из таблицы #cr-grid-table.
 // @author       Codex
 // @match        https://kp-lead-centre.ru/admin/domain/customer-request/index*
@@ -56,6 +56,7 @@
   const CREATE_PHONE_PENDING_KEY = '__tm_create_phone_pending_v1';
   const BULK_SAVED_NUMBERS_KEY = 'tm_bulk_saved_numbers_v1';
   const BULK_SOURCE_MAP_KEY = 'tm_bulk_phone_src_v1';               // карта номер→источник (партнёр/листовка)
+  const BULK_CALL_SIP_KEY = 'tm_bulk_call_sip_v1';                  // KP: карта номер→sip для звонка (по «Источник:»)
   const CREATE_SOURCE_PENDING_KEY = '__tm_create_source_pending_v1'; // передача источника в новую вкладку create
   const THEME_STORAGE_KEY = 'tm-crm-v8-theme-v1';
   const SHARED_THEME_STORAGE_KEY = 'tm-crm-theme-v1';
@@ -1435,6 +1436,34 @@
     saveBulkSourceMap(cur);
   }
   function getBulkSourceForPhone(phone) { const p = normalizeBulkPhone(phone); if (!p) return null; const m = loadBulkSourceMap(); return m[p] || null; }
+  // KP-only: sip звонка по заголовку «Источник:» в буфере. «КП Старая АТС» → sip_id=002, остальные → 003.
+  // Заголовок «Источник: …» назначает sip всем номерам НИЖЕ до следующего заголовка.
+  function loadBulkCallSipMap() { try { const r = sessionStorage.getItem(BULK_CALL_SIP_KEY); const o = r ? JSON.parse(r) : {}; return (o && typeof o === 'object') ? o : {}; } catch (_e) { return {}; } }
+  function saveBulkCallSipMap(map) { try { sessionStorage.setItem(BULK_CALL_SIP_KEY, JSON.stringify(map || {})); } catch (_e) {} }
+  function parseBulkCallSipMap(text) {
+    const map = {};
+    let curSip = ';sip_id=003';
+    String(text || '').split(/\r?\n/).forEach((line) => {
+      const src = line.match(/источник\s*:\s*(.+)$/i);
+      if (src) { curSip = /старая/i.test(src[1]) ? ';sip_id=002' : ';sip_id=003'; return; }
+      const m = line.match(/(?:\+7|8)[\s\-()]*\d(?:[\s\-()]*\d){9}/);
+      if (!m) return;
+      const phone = normalizeBulkPhone(m[0]);
+      if (phone) map[phone] = curSip;
+    });
+    return map;
+  }
+  function rememberBulkCallSipFromText(text) {
+    const parsed = parseBulkCallSipMap(text);
+    if (!Object.keys(parsed).length) return;
+    const cur = loadBulkCallSipMap();
+    Object.keys(parsed).forEach((k) => { cur[k] = parsed[k]; });
+    saveBulkCallSipMap(cur);
+  }
+  function getBulkCallSipForPhone(phone) {
+    try { const p = normalizeBulkPhone(phone); if (p) { const m = loadBulkCallSipMap(); if (m[p]) return m[p]; } } catch (_e) {}
+    return tmSipCallSuffix(); // нет источника → направленческий (кп=003)
+  }
   function writePendingCreateSourceForPhone(phone) {
     const meta = getBulkSourceForPhone(phone);
     try {
@@ -2045,6 +2074,7 @@
       const text = await navigator.clipboard.readText();
       bulkPhoneUiState.clipboardPhones = extractBulkPhonesFromText(text);
       try { rememberBulkSourcesFromText(text); } catch (_e) {}
+      try { rememberBulkCallSipFromText(text); } catch (_e) {}
     } catch (_error) {
       bulkPhoneUiState.clipboardPhones = bulkPhoneUiState.clipboardPhones || [];
     }
@@ -5227,7 +5257,7 @@
         <div class="bulk-phone-sep">
           <div class="bulk-phone-sep-title">
             <span>Поиск номера ${idx}: ${phoneText}</span>
-            ${callHref0 ? `<span class="bulk-call-wrap"><a class="bulk-call-btn${callMarked0 ? ' is-called' : ''}" data-phone="${escapeHtml(normalizedCallPhone0)}" href="callto:${callHref0}${tmSipCallSuffix()}" title="Позвонить ${phoneText}"><svg viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M6.6 10.8c1.4 2.8 3.8 5.1 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1C9.6 21 3 14.4 3 6c0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.3.2 2.5.6 3.6.1.3 0 .7-.2 1L6.6 10.8zM16 2h6v6l-2.3-2.3-4 4-1.4-1.4 4-4z"/></svg></a>${callMarked0 ? '<span class="bulk-call-check" title="Звонок отмечен">✓</span>' : ''}</span>` : ''}
+            ${callHref0 ? `<span class="bulk-call-wrap"><a class="bulk-call-btn${callMarked0 ? ' is-called' : ''}" data-phone="${escapeHtml(normalizedCallPhone0)}" href="callto:${callHref0}${getBulkCallSipForPhone(normalizedCallPhone0)}" title="Позвонить ${phoneText}"><svg viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M6.6 10.8c1.4 2.8 3.8 5.1 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1C9.6 21 3 14.4 3 6c0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.3.2 2.5.6 3.6.1.3 0 .7-.2 1L6.6 10.8zM16 2h6v6l-2.3-2.3-4 4-1.4-1.4 4-4z"/></svg></a>${callMarked0 ? '<span class="bulk-call-check" title="Звонок отмечен">✓</span>' : ''}</span>` : ''}
           </div>
           <div class="bulk-phone-sep-sub">${subtitle}</div>
         </div>
@@ -6957,7 +6987,7 @@
               <div class="bulk-phone-sep-title">
                 <span class="bulk-phone-title-main">
                   <span>Поиск номера ${idx}: ${phoneText}</span>
-                  ${callHref ? `<span class="bulk-call-wrap"><a class="bulk-call-btn${callMarked ? ' is-called' : ''}" data-phone="${escapeHtml(normalizedCallPhone)}" href="callto:${callHref}${tmSipCallSuffix()}" title="Позвонить ${phoneText}"><svg viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M6.6 10.8c1.4 2.8 3.8 5.1 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1C9.6 21 3 14.4 3 6c0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.3.2 2.5.6 3.6.1.3 0 .7-.2 1L6.6 10.8zM16 2h6v6l-2.3-2.3-4 4-1.4-1.4 4-4z"/></svg></a>${callMarked ? '<span class="bulk-call-check" title="Звонок отмечен">✓</span>' : ''}</span>` : ''}
+                  ${callHref ? `<span class="bulk-call-wrap"><a class="bulk-call-btn${callMarked ? ' is-called' : ''}" data-phone="${escapeHtml(normalizedCallPhone)}" href="callto:${callHref}${getBulkCallSipForPhone(normalizedCallPhone)}" title="Позвонить ${phoneText}"><svg viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M6.6 10.8c1.4 2.8 3.8 5.1 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1C9.6 21 3 14.4 3 6c0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.3.2 2.5.6 3.6.1.3 0 .7-.2 1L6.6 10.8zM16 2h6v6l-2.3-2.3-4 4-1.4-1.4 4-4z"/></svg></a>${callMarked ? '<span class="bulk-call-check" title="Звонок отмечен">✓</span>' : ''}</span>` : ''}
                 </span>
                 <span class="bulk-phone-title-actions">
                   ${canAddForExisting ? `<button type="button" class="bulk-add-top-btn" data-action="bulk-add-request" data-request-url="${escapeHtml(firstRequestUrl)}" data-request-id="${escapeHtml(firstRequestId)}" data-phone="${escapeHtml(header.bulkPhone || '')}" title="Добавить заявку">Добавить заявку</button>` : ''}
