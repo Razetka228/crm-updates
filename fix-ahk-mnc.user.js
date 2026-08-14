@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
 // @name         Фикс базы + ахк (МНЧ)
 // @namespace    http://tampermonkey.net/
-// @version      28.9
+// @version      29.0
 // @description  ОБЪЕДИНЕННЫЙ СКРИПТ: + Фикс кнопки "Применить фильтр" + Кастомное меню услуг + Логика кнопок (create/update)
 // @author       кто прочитатет тот умрет
 // @match        https://mnc-lead-centre.ru/admin/domain/customer-request/update*
@@ -34,6 +34,7 @@
 (function() {
     'use strict';
     console.log('🚀 CRM Lead Centre - МЕГА-ОБЪЕДИНЕННАЯ ВЕРСИЯ 28.2');
+    console.log('[Фикс МНЧ 28.8] статистика диспа: кросс-вкладочный гейт свежести (localStorage TTL 3мин/10мин) — report-dispatcher не бьётся повторно с нескольких вкладок/фокусов (снижение нагрузки на базу)');
     console.log('[Фикс МНЧ city-number 28.5] getCity/getCityFromRequest/normalizeTelegramTargetCity больше НЕ режут цифры — «Новосибирск 2» ищется с номером (open-city + карточка→заявка)');
     console.log('[Фикс МНЧ partner-comment 28.6] lastPartnerText сбрасывается при смене партнёра — инфо партнёра снова дописывается в комментарий на повторной заявке (баг «редко не переносится»)');
     console.log('[Фикс МНЧ 28.7] партнёр 759 добавлен в список авто-«Отзыв» (REVIEW_SHOWN_ALLOWED)');
@@ -29013,6 +29014,12 @@ function loadAuditManagement() {
         const MONTHLY_CITY_STAT_FINE_KEY = 'tm-dispatcher-monthly-city-stat-fine-v1';
         const STATS_REFRESH_INTERVAL = 80000;
         const MONTHLY_CITY_STAT_REFRESH_INTERVAL = 300000;
+        // Гейт свежести: report-dispatcher/index — ТЯЖЁЛЫЙ серверный отчёт (разрабы СРМ жаловались
+        // на нагрузку базы). Если в localStorage (общий на ВСЕ вкладки машины) свежие данные, повторно
+        // НЕ бьём отчёт: несколько вкладок index + каждый фокус вкладки давали флуд. TTL = потолок частоты
+        // обращения к report-dispatcher на МАШИНУ (не на вкладку).
+        const STATS_FRESH_TTL = 180000;               // дневная статистика — не чаще раза в 3 мин на машину
+        const MONTHLY_FRESH_TTL = 600000;             // месячный отчёт — не чаще раза в 10 мин на машину
         const STATS_REFRESH_DEBOUNCE = 1800;
         const DEFAULT_DISPATCHER_NAME = 'Попков Данил';
         // Отчёт КЦ у МНЧ и БТ ОБЩИЙ — обе базы шлют в один чат (на КП свой, его не трогаем).
@@ -30701,6 +30708,36 @@ function loadAuditManagement() {
             } catch (error) {}
         }
 
+        // Свежий (< STATS_FRESH_TTL) кэш дневной статистики этой машины и текущего скоупа — иначе null.
+        function readCachedDispatcherStatsFresh() {
+            try {
+                const raw = localStorage.getItem(STATS_CACHE_KEY);
+                if (!raw) return null;
+                const parsed = JSON.parse(raw);
+                const scope = getDispatcherStatsCacheScope();
+                if (!parsed || parsed.dispatcher !== scope.dispatcher || parsed.reportDate !== scope.reportDate) return null;
+                if (!parsed.savedAt || (Date.now() - parsed.savedAt) >= STATS_FRESH_TTL) return null;
+                return normalizeCachedStats(parsed.data);
+            } catch (error) {
+                return null;
+            }
+        }
+        // Свежий (< MONTHLY_FRESH_TTL) кэш месячной статистики — иначе null.
+        function readCachedMonthlyCityStatFresh() {
+            try {
+                const raw = localStorage.getItem(MONTHLY_CITY_STAT_CACHE_KEY);
+                if (!raw) return null;
+                const parsed = JSON.parse(raw);
+                const scope = getDispatcherMonthlyStatsScope();
+                if (!parsed || parsed.dispatcher !== scope.dispatcher || parsed.monthKey !== scope.monthKey
+                    || parsed.doubleBaseSalaryDaysKey !== getDispatcherWeekendSignature()) return null;
+                if (!parsed.savedAt || (Date.now() - parsed.savedAt) >= MONTHLY_FRESH_TTL) return null;
+                return normalizeMonthlyCityStatData(parsed.data);
+            } catch (error) {
+                return null;
+            }
+        }
+
         statsData = readCachedDispatcherStats();
         dispatcherStatsScopeKey = formatReportDate(getDispatcherStatsDate());
         if (statsData) {
@@ -30996,6 +31033,13 @@ function loadAuditManagement() {
             }
 
             lastMonthlyCityStatRequestAt = now;
+            // Кросс-вкладочный гейт: свежий месячный кэш → НЕ бьём report-dispatcher повторно.
+            const freshMonthly = readCachedMonthlyCityStatFresh();
+            if (freshMonthly) {
+                monthlyCityStatData = freshMonthly;
+                renderMonthlyCityStat();
+                return null;
+            }
             renderMonthlyCityStat();
 
             monthlyCityStatRequestPromise = (async () => {
@@ -31339,6 +31383,15 @@ function loadAuditManagement() {
                 dispatcherStatsScopeKey = scopeKey;
                 statsData = null;
             }
+            // Кросс-вкладочный гейт: свежие данные в localStorage → НЕ бьём тяжёлый report-dispatcher повторно.
+            const freshCached = readCachedDispatcherStatsFresh();
+            if (freshCached) {
+                statsData = freshCached;
+                statsLoadState = 'ready';
+                renderStatsWidget();
+                requestPositionUpdate();
+                return null;
+            }
             statsLoadState = statsData ? 'refreshing' : 'loading';
             renderStatsWidget();
             requestPositionUpdate();
@@ -31555,7 +31608,7 @@ function loadAuditManagement() {
                     if (document.visibilityState === 'visible') {
                         void refreshNativeSalary();
                     }
-                }, 480000);
+                }, 270000); // ЗП: раз в 4:30 (лёгкий фетч index-страницы, не report-dispatcher)
                 window.setTimeout(() => { void refreshNativeSalary(); }, 5000);
             }
 
