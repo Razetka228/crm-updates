@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
 // @name         Фикс базы + ахк (МНЧ)
 // @namespace    http://tampermonkey.net/
-// @version      29.0
+// @version      29.3
 // @description  ОБЪЕДИНЕННЫЙ СКРИПТ: + Фикс кнопки "Применить фильтр" + Кастомное меню услуг + Логика кнопок (create/update)
 // @author       кто прочитатет тот умрет
 // @match        https://mnc-lead-centre.ru/admin/domain/customer-request/update*
@@ -38,6 +38,7 @@
     console.log('[Фикс МНЧ city-number 28.5] getCity/getCityFromRequest/normalizeTelegramTargetCity больше НЕ режут цифры — «Новосибирск 2» ищется с номером (open-city + карточка→заявка)');
     console.log('[Фикс МНЧ partner-comment 28.6] lastPartnerText сбрасывается при смене партнёра — инфо партнёра снова дописывается в комментарий на повторной заявке (баг «редко не переносится»)');
     console.log('[Фикс МНЧ 28.7] партнёр 759 добавлен в список авто-«Отзыв» (REVIEW_SHOWN_ALLOWED)');
+    console.log('[Фикс МНЧ 29.1] интеграция с TG-клиентом: закрыл/создал заявку → авто-реплей на ОТВЕТ города по согласованию (согласование помечается #REQ<id>#, привязка mid→заявка на клиенте; закрытие «Клиент отказался»/«Помощь не актуальна» + «Создать»; веер СПб/МСК исключён)');
     // ===== ВРЕМЕННАЯ ДИАГНОСТИКА ПЕРЕНОСА АДРЕСА (2026-07-12) — ВЕРХНИЙ УРОВЕНЬ =====
     // На верхнем уровне (до host-гейта yandex), чтобы работала И на картах, И на вкладке заявки.
     // Самодостаточная панель (не консоль) с кнопкой «Копировать». Убрать после отладки.
@@ -13344,6 +13345,7 @@ function tryRunPendingStatusBadgeAutoClick(attempt = 0) {
 
 function sendToAHK(city, message) {
     ensureStatusDiagRuntimeHooks();
+    const _tmOrigCity = String(city || '');   // ДО маппинга — для детекта веера СПб/МСК (маппинг срезает «(МСК)»)
     city = mapAhkSearchCity(city);
     message = (message || "").trim();
     if (!city || !message) {
@@ -13353,6 +13355,17 @@ function sendToAHK(city, message) {
         });
         return Promise.resolve({ ok: false, skipped: true });
     }
+
+    // Интеграция с TG-клиентом: согласование помечаем #REQ<id заявки># — клиент привяжет ОТВЕТ города к
+    // заявке (авто-реплей при закрытии/создании). Только текст согласования (Берем?/На когда?/белая заявка) и
+    // НЕ для веера СПб/МСК (СПб N / Москва N / города «(МСК)») — юзер: на веер не слать (потом решим отдельно).
+    try {
+        const _tmVeer = /спб\s*\d|москва\s*\d|\(\s*мск\s*\)/i.test(_tmOrigCity);
+        if (!_tmVeer && !/^__/.test(message) && !/^#REQ/.test(message) && /Берем\?|На когда\?|бел[ао]я\s*заявк/i.test(message)) {
+            const rid = new URL(location.href).searchParams.get('id') || '';
+            if (/^\d+$/.test(rid)) message = '#REQ' + rid + '#' + message;
+        }
+    } catch (e) {}
 
     const now = Date.now();
     const key = city + "|" + message;
@@ -24490,6 +24503,48 @@ function loadCopyTransfer() {
             });
         });
     }
+
+    // === Интеграция с TG-клиентом: закрыл/создал заявку → реплей на ОТВЕТ города по согласованию ===
+    // Согласование помечается #REQ<id># (sendToAHK), клиент запоминает ответ города по id заявки. Здесь
+    // при клике по причине «Не оформлена» / кнопке «Создать» шлём в клиент __APPROVAL_REPLY__:<id>:<текст>,
+    // он реплеем на ответ города отпишет исход. Если ответа/согласования по заявке нет — клиент молча игнорит.
+    (function crmApprovalReplyOnClose() {
+        function curReqId() {
+            try { const id = new URL(location.href).searchParams.get('id') || ''; return /^\d+$/.test(id) ? id : ''; }
+            catch (e) { return ''; }
+        }
+        function sendApprovalReply(reqId, text) {
+            if (!reqId || !text) return;
+            try {
+                GM_xmlhttpRequest({
+                    method: 'GET',
+                    url: 'http://127.0.0.1:12348/?city=kp&message=' + encodeURIComponent('__APPROVAL_REPLY__:' + reqId + ':' + text) + '&_t=' + Date.now(),
+                    timeout: 3000, onload: function () {}, onerror: function () {}, ontimeout: function () {}
+                });
+            } catch (e) {}
+        }
+        const REASONS = {
+            'клиент отказался от услуг из-за озвученных условий': 'Клиент отказался от услуг',
+            'клиенту помощь не актуальна': 'Клиенту помощь не актуальна'
+        };
+        document.addEventListener('click', function (e) {
+            try {
+                const t = e.target;
+                if (!t || !t.closest) return;
+                const reqId = curReqId();
+                if (!reqId) return;
+                // причина из модала «Не оформлена» (строка, чей текст РОВНО = одна из причин)
+                let node = t;
+                for (let i = 0; i < 6 && node; i++, node = node.parentElement) {
+                    const txt = (node.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+                    if (REASONS[txt]) { sendApprovalReply(reqId, REASONS[txt]); return; }
+                }
+                // кнопка «Создать» (создание заявки → реплей с id заявки)
+                const btn = t.closest('button');
+                if (btn && (btn.textContent || '').replace(/\s+/g, ' ').trim() === 'Создать') { sendApprovalReply(reqId, reqId); return; }
+            } catch (err) {}
+        }, true);
+    })();
 
     // Функция копирования в буфер (оставим для совместимости, но можно убрать)
     function copyToClipboard(text) {

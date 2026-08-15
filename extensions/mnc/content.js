@@ -1333,7 +1333,7 @@ html.tm-v11-dark .tm-closed-action-btn.tm-closed-action-primary:hover{
     return;
   }
   if(__isBridgeCtx) return;
-var TM_V11_VERSION='1.0.929';
+var TM_V11_VERSION='1.0.930';
 var TM_FAST_SUPPRESS_UNLOAD_MAX_MS=8000;
 var TM_CREATE_LOADING_LOCK_MS=1800;
 var TM_CREATE_LOADING_FAILSAFE_MS=30000;
@@ -20228,6 +20228,16 @@ function handleClarify(){
         it.addEventListener('mousedown',function(e){e.preventDefault();});
         it.addEventListener('click',function(e){
           e.stopPropagation();
+          // Интеграция с TG-клиентом: закрытие с причиной → реплей на ОТВЕТ города по этой заявке.
+          // Матчим по ТЕКСТУ причины (r.l) — коды status_change_type у направлений разные, текст одинаков.
+          try {
+            var __tgm={'Клиент отказался от услуг из-за озвученных условий':'Клиент отказался от услуг','Клиенту помощь не актуальна':'Клиенту помощь не актуальна'};
+            var __tgl=String(r.l||'').replace(/\s+/g,' ').trim(), __tgt=__tgm[__tgl], __tgid=(new URL(location.href).searchParams.get('id')||'');
+            if(__tgt && /^\d+$/.test(__tgid)){
+              GM_xmlhttpRequest({method:'GET',url:'http://127.0.0.1:12348/?city=kp&message='+encodeURIComponent('__APPROVAL_REPLY__:'+__tgid+':'+__tgt)+'&_t='+Date.now(),timeout:3000,onload:function(){},onerror:function(){},ontimeout:function(){}});
+              console.log('[TG-интеграция] исход закрытия → реплей: '+__tgt+' (заявка '+__tgid+')');
+            }
+          } catch(_e){}
           _closeNfDrop(function(){_tmReasonUsePreparedOrFallback(kind,r.v);});
         });
         list.appendChild(it);

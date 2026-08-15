@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "CRM Create v11.1 + v8 (МНЧ)",
-  "version": "1.0.1429",
+  "version": "1.0.1430",
   "description": "CRM UI replacement (create/update v11.1) + CRM v8 Live Redesign (index), converted from Tampermonkey scripts.",
   "permissions": [
     "clipboardWrite",
