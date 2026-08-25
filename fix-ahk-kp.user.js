@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
 // @name         Фикс базы + ахк
 // @namespace    http://tampermonkey.net/
-// @version      29.3
+// @version      29.15
 // @description  ОБЪЕДИНЕННЫЙ СКРИПТ: + Фикс кнопки "Применить фильтр" + Кастомное меню услуг + Логика кнопок (create/update)
 // @author       кто прочитатет тот умрет
 // @match        https://kp-lead-centre.ru/admin/domain/customer-request/update*
@@ -38,7 +38,7 @@
     console.log('[Фикс КП partner-comment 28.3] lastPartnerText сбрасывается при смене партнёра — инфо партнёра (723/БЕЛАЯ ЗАЯВКА) снова дописывается в комментарий на повторной заявке (баг «редко не переносится»)');
     console.log('[Фикс КП 28.4] партнёр 759 добавлен в список авто-«Отзыв» (REVIEW_SHOWN_ALLOWED)');
     console.log('[Фикс КП 28.5] веер СПб/МСК на соглас шлёт во ВСЕ чаты СРАЗУ (без задержек по очереди) — текст идёт напрямую в Telegram');
-    console.log('[Фикс КП 28.9] интеграция с TG-клиентом: закрыл/создал заявку → авто-реплей на ОТВЕТ города по согласованию (согласование помечается #REQ<id>#, привязка mid→заявка на клиенте; закрытие «Клиент отказался»/«Помощь не актуальна» + «Создать»; веер СПб/МСК исключён)');
+    console.log('[Фикс КП 29.0] интеграция с TG-клиентом: закрыл/создал заявку → авто-реплей на ОТВЕТ города по согласованию (согласование помечается #REQ<id>#, привязка mid→заявка на клиенте; закрытие «Клиент отказался»/«Помощь не актуальна» + «Создать»; веер СПб/МСК ТЕПЕРЬ включён — реплей маршрутизируется по городу заявки) + веер помечается #NV# (клиент не открывает чат, 300мс-таймер убран)');
 
     // ===== ВРЕМЕННАЯ ДИАГНОСТИКА ПЕРЕНОСА АДРЕСА (2026-07-12) — ВЕРХНИЙ УРОВЕНЬ =====
     // На верхнем уровне (до host-гейта yandex), чтобы работала И на картах, И на вкладке заявки.
@@ -4756,6 +4756,9 @@ if (/(^|\.)yandex\.[a-z.]+$/i.test(window.location.hostname)) {
     sendHeartbeat();
     preventSleepInterval = setInterval(sendHeartbeat, 1800);
 
+    // (диагностика строки поиска Яндекс.Карт снята — фикс пробела нас.пункта подтверждён)
+
+
     GM_addValueChangeListener('map_action_close', function(name, oldVal, newVal, remote) {
         if (remote) window.close();
     });
@@ -7876,6 +7879,9 @@ if (/(^|\.)yandex\.[a-z.]+$/i.test(window.location.hostname)) {
 
     function ensureInitialSpace(el, force = false) {
         if (!el || (hasUserTyped && !force)) return;
+        // [FIX v2 пробел нас.пункта] Для area-first (нас.пункт) пробелом рулит только финализатор
+        // tmAreaFirstSpaceFinalizer — здесь не трогаем, чтобы не воевать с тримом Яндекса.
+        if (!force && String(areaFirstExpectedBaseValue || '').trim()) return;
 
         const currentValue = String(el.value || '');
         if (!currentValue) return;
@@ -8449,7 +8455,8 @@ if (/(^|\.)yandex\.[a-z.]+$/i.test(window.location.hostname)) {
         const markAsUserTyped = options.markAsUserTyped === true;
         const baseValue = String(value || '').trim();
         if (!baseValue) return;
-        const nextValue = preserveFocus ? `${baseValue} ` : baseValue;
+        const wantTrailingSpace = preserveFocus && options.noTrailingSpace !== true;
+        const nextValue = wantTrailingSpace ? `${baseValue} ` : baseValue;
 
         manualRelease = !preserveFocus || deferFocus;
         keepFocus = preserveFocus && !deferFocus;
@@ -8457,7 +8464,7 @@ if (/(^|\.)yandex\.[a-z.]+$/i.test(window.location.hostname)) {
 
         if (preserveFocus) {
             initialBaseValue = baseValue;
-            didInitialSpace = true;
+            didInitialSpace = wantTrailingSpace;
             // После автозапуска поиска не удерживаем значение lock'ом,
             // чтобы дальнейший ввод вел себя как полностью ручной.
             clearDraftLock();
@@ -8656,9 +8663,13 @@ if (/(^|\.)yandex\.[a-z.]+$/i.test(window.location.hostname)) {
 
             setSearchInputValue(input, currentPlan.searchText, {
                 preserveFocus: true,
-                deferFocus: !currentPlan.areaFirst
+                deferFocus: !currentPlan.areaFirst,
+                noTrailingSpace: true
             });
-            areaFirstExpectedBaseValue = '';
+            // [FIX пробел нас.пункта] Активируем держатель хвостового пробела: задаём базу =
+            // текст нас.пункта, чтобы ensureAreaFirstSeparatorNow стабильно возвращал "НасПункт "
+            // после каждого среза Яндексом (у города это делает ensureInitialSpace без базы).
+            areaFirstExpectedBaseValue = currentPlan.areaFirst ? String(currentPlan.searchText || '').trim() : '';
 
             // Если пользователь уже что-то набрал — добавляем его текст после нас.пункта
             if (userTextBeforePlan) {
@@ -8690,7 +8701,7 @@ if (/(^|\.)yandex\.[a-z.]+$/i.test(window.location.hostname)) {
             schedulePreciseFreeMode(2200);
 
             if (currentPlan.areaFirst) {
-                restoreSearchInputFocusAfterAutoSearch({ ensureTrailingSpace: true });
+                restoreSearchInputFocusAfterAutoSearch({ ensureTrailingSpace: false });
                 markPreciseSearchPlanExecuted(currentPlan.id);
                 clearPreciseSearchPlan();
                 clearPendingSubmitAutomation();
@@ -9217,6 +9228,46 @@ if (/(^|\.)yandex\.[a-z.]+$/i.test(window.location.hostname)) {
     watchdog = setInterval(() => {
         initPreloadGuard();
     }, 220);
+
+    // [FIX v2 пробел нас.пункта] ФИНАЛИЗАТОР хвостового пробела — без войны с Яндексом.
+    // Яндекс на каждой geocode-реконсиляции срезает наш хвостовой пробел; «догоняющие»
+    // держатели создавали мерцание каретки. Здесь пробел НЕ держим циклически: ждём, пока
+    // поле стабильно STABLE_MS (Яндекс перестал перерисовывать), и ставим "База " ОДИН раз.
+    // Пока значение дёргается — молчим. Быструю печать закрывает keydown-держатель выше.
+    (function tmAreaFirstSpaceFinalizer(){
+        const STABLE_MS = 550;
+        let lastVal = null, lastChangeAt = 0;
+        setInterval(() => {
+            try {
+                const base = String(areaFirstExpectedBaseValue || '').trim();
+                if (!base) { lastVal = null; return; }
+                if (hasUserTyped) return;
+                const el = getUsableSearchInput();
+                if (!el || document.activeElement !== el) return;
+                if ((Date.now() - lastManualInputAt) < 300) return;
+
+                const v = String(el.value || '');
+                if (v !== lastVal) { lastVal = v; lastChangeAt = Date.now(); return; }
+                if ((Date.now() - lastChangeAt) < STABLE_MS) return;
+
+                if (v.indexOf(base) !== 0) return;
+                if (v.charAt(base.length) === ' ') return;
+
+                const next = base + ' ' + v.slice(base.length);
+                const prevPf = programmaticFocus;
+                programmaticFocus = true;
+                try {
+                    const ns = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                    if (ns) ns.call(el, next); else el.value = next;
+                    try { const tr = el._valueTracker; if (tr && tr.setValue) tr.setValue(''); } catch (e) {}
+                    el.dispatchEvent(new Event('input', { bubbles: true }));
+                    if (el.setSelectionRange) el.setSelectionRange(next.length, next.length);
+                } catch (e) {}
+                setTimeout(() => { programmaticFocus = prevPf; }, 0);
+                lastVal = next; lastChangeAt = Date.now();
+            } catch (e) {}
+        }, 130);
+    })();
 
     window.addEventListener('load', () => {
         scheduleGuardStop(1200);
@@ -13353,8 +13404,10 @@ function sendToAHK(city, message) {
     // заявке (авто-реплей при закрытии/создании). Только текст согласования (Берем?/На когда?/белая заявка) и
     // НЕ для веера СПб/МСК (СПб N / Москва N / города «(МСК)») — юзер: на веер не слать (потом решим отдельно).
     try {
-        const _tmVeer = /спб\s*\d|москва\s*\d|\(\s*мск\s*\)/i.test(_tmOrigCity);
-        if (!_tmVeer && !/^__/.test(message) && !/^#REQ/.test(message) && /Берем\?|На когда\?|бел[ао]я\s*заявк/i.test(message)) {
+        const _tmVeer = /спб\s*\d|москва\s*\d|\(\s*мск\s*\)/i.test(_tmOrigCity);   // (справочно) детект веера СПб/МСК
+        // Веер ТЕПЕРЬ ТОЖЕ метим #REQ<id># (раньше исключали): клиент привязывает согласование к заявке в
+        // КАЖДОЙ группе веера, а реплей-исход маршрутизируется по ГОРОДУ ЗАЯВКИ (совпадение названия группы).
+        if (!/^__/.test(message) && !/^#REQ/.test(message) && /Берем\?|На когда\?|бел[ао]я\s*заявк/i.test(message)) {
             const rid = new URL(location.href).searchParams.get('id') || '';
             if (/^\d+$/.test(rid)) message = '#REQ' + rid + '#' + message;
         }
@@ -14382,7 +14435,12 @@ function normalizeWhiteRequestAlertText(text) {
         // Раньше слали ПО ОЧЕРЕДИ с паузой (наследие AHK-клавиатуры: чат искался по одному).
         // Теперь текст уходит НАПРЯМУЮ в Telegram — шлём во ВСЕ чаты веера СРАЗУ, без задержек.
         // Города в веере разные → дубль-гард sendToAHK (city|message) отправкам не мешает.
-        (Array.isArray(chats) ? chats : []).forEach((chat) => { try { sendToAHK(chat, text); } catch (_) {} });
+        // ВЕЕР (>1 город) метим префиксом #NV# — клиент по нему НЕ открывает чат (город метку НЕ видит,
+        // tgBridge её срезает перед отправкой). Одиночный (1 город) — без метки, клиент откроет чат как
+        // обычную отправку. Это заменяет старый 300мс-таймер в клиенте на явную метку от отправителя.
+        const arr = Array.isArray(chats) ? chats : [];
+        const out = arr.length > 1 ? ('#NV#' + text) : text;
+        arr.forEach((chat) => { try { sendToAHK(chat, out); } catch (_) {} });
     }
     function tmSpbFanoutClarify(info, text, requestId) {
         // Защита от двойного клика: не запускаем веер повторно в течение 1.2с на одной заявке.
@@ -24460,14 +24518,10 @@ function loadCopyTransfer() {
             catch (e) { return ''; }
         }
         function sendApprovalReply(reqId, text) {
-            if (!reqId || !text) return;
-            try {
-                GM_xmlhttpRequest({
-                    method: 'GET',
-                    url: 'http://127.0.0.1:12348/?city=kp&message=' + encodeURIComponent('__APPROVAL_REPLY__:' + reqId + ':' + text) + '&_t=' + Date.now(),
-                    timeout: 3000, onload: function () {}, onerror: function () {}, ontimeout: function () {}
-                });
-            } catch (e) {}
+            // ОТКЛЮЧЕНО (реплей теперь шлёт РАСШИРЕНИЕ после реальной смены статуса, content.js
+            // tmApprovalReplyOnStatusChange): мгновенная отправка по клику причины/«Создать» убрана —
+            // раньше уходило ДО сохранения. Слушатель оставлен пустым, чтобы не трогать остальной код.
+            return;
         }
         const REASONS = {
             'клиент отказался от услуг из-за озвученных условий': 'Клиент отказался от услуг',
