@@ -14,8 +14,8 @@
 
 (() => {
   'use strict';
-  try{console.log('[v8 БТ type-patch 3.1.104] patchModerationCardInPlace теперь патчит .tag-fixed — тип заявки (Повтор/Гарантия) обновляется на главной in-place без перезагрузки');}catch(_){}
-  try{console.log('[v8 БТ bulk-source 3.1.105] «Поиск номера»: строки «N партнер» / «Город (описание)» запоминаются по номеру → при Создать/Добавить заявку источник передаётся в новую вкладку');}catch(_){}
+  try{console.log('[v8 БТ type-patch 3.1.108] patchModerationCardInPlace патчит .tag-fixed (тип) + .call-pill (плашка «На прозвоне») — обновляются на главной in-place без перезагрузки');}catch(_){}
+  try{console.log('[v8 БТ bulk-source 3.1.107] «Поиск номера»: строки «N партнер» / «Город (описание)» запоминаются по номеру → при Создать/Добавить заявку источник передаётся в новую вкладку');}catch(_){}
 
   const COPY_FILE_DIAG_BUILD = 'copy-file-2026-06-28-011';
   function markCopyFileDebug(stage, extra = {}) {
@@ -1415,7 +1415,7 @@
   function parseBulkSourceMap(text) {
     const map = {};
     String(text || '').split(/\r?\n/).forEach((line) => {
-      const m = line.match(/(?:\+7|8)[\s\-()]*\d(?:[\s\-()]*\d){9}/);
+      const m = line.match(/\+?[78][\s\-()]*\d(?:[\s\-()]*\d){9}/);
       if (!m) return;
       const phone = normalizeBulkPhone(m[0]);
       if (!phone) return;
@@ -1749,7 +1749,7 @@
 
   function extractBulkPhonesFromText(text) {
     const src = String(text || '');
-    const matches = src.match(/(?:\+7|8)[\s\-()]*\d(?:[\s\-()]*\d){9}/g) || [];
+    const matches = src.match(/\+?[78][\s\-()]*\d(?:[\s\-()]*\d){9}/g) || [];
     const seen = new Set();
     const result = [];
     matches.forEach((raw) => {
@@ -6929,7 +6929,79 @@
     });
     if (current) groups.push(current);
 
-    const groupItems = groups.map((group) => {
+    // === Схлопывание дубль-групп: доп-номер той же карточки клиента ===
+    // База в списке ВСЕГДА показывает основной номер карточки, поэтому поиск по доп-номеру
+    // находит те же самые заявки, что и поиск по основному. Надёжный признак дубля — ИДЕНТИЧНЫЙ
+    // набор ID заявок (ID заявки глобально уникален ⇒ одинаковый набор = одна карточка; маска
+    // «+7 937-****-1880» середину не различает и для сравнения не годится). Дубль-группу отдельно
+    // не рисуем, а её искомый номер дописываем рядом с номером основной (первой) группы.
+    const bulkDupIdKey = (rowList) => {
+      const ids = [];
+      const seen = new Set();
+      (Array.isArray(rowList) ? rowList : []).forEach((row) => {
+        if (row?.isBulkHeader) return;
+        const id = moderationCanonicalId(row);
+        if (!id || seen.has(id)) return;
+        seen.add(id);
+        ids.push(String(id));
+      });
+      return ids.sort((a, b) => (Number(a) - Number(b)) || a.localeCompare(b)).join(',');
+    };
+    // true, если искомый номер группы совпадает с ОСНОВНЫМ номером её карточек (виден масочно
+    // в колонке телефона: «+7 937-****-1880+2»). Тогда группа — канонична (шапка = карточки).
+    const bulkSearchedIsPrimary = (bulkPhone, rowList) => {
+      const searchLocal = String(normalizeBulkPhone(bulkPhone) || '').replace(/^\+7/, '');
+      if (searchLocal.length !== 10) return false;
+      const sample = (Array.isArray(rowList) ? rowList : [])
+        .map((r) => normalizeText(r?.phone || ''))
+        .find((v) => v && v !== '—') || '';
+      if (!sample) return false;
+      if (sample.indexOf('*') === -1) {
+        const full = String(normalizeBulkPhone(sample) || '').replace(/^\+7/, '');
+        return full.length === 10 && full === searchLocal;
+      }
+      const cut = sample.replace(/\+\d{1,2}\s*$/, ''); // убрать хвост «+N» (кол-во доп-номеров)
+      const parts = cut.split('*');
+      let lead = String(parts[0] || '').replace(/\D/g, '');
+      if (lead.length >= 4 && (lead[0] === '7' || lead[0] === '8')) lead = lead.slice(1);
+      const tail = String(parts[parts.length - 1] || '').replace(/\D/g, '');
+      const leadOk = lead ? searchLocal.startsWith(lead) : true;
+      const tailOk = tail ? searchLocal.endsWith(tail) : true;
+      return leadOk && tailOk;
+    };
+    const dropGroupIndex = new Set();
+    const extraNumsByGroupIndex = new Map();
+    (() => {
+      const clusters = new Map();
+      groups.forEach((group, gi) => {
+        const header = group.header || {};
+        const rowList = Array.isArray(group.rows) ? group.rows : [];
+        if (normalizeText(header.bulkError || '') || rowList.length === 0) return;
+        const key = bulkDupIdKey(rowList);
+        if (!key) return;
+        if (!clusters.has(key)) clusters.set(key, []);
+        clusters.get(key).push(gi);
+      });
+      clusters.forEach((giList) => {
+        if (giList.length < 2) return;
+        let anchorGi = giList.find((gi) => bulkSearchedIsPrimary(groups[gi].header?.bulkPhone || '', groups[gi].rows));
+        if (anchorGi === undefined) anchorGi = giList.slice().sort((a, b) => a - b)[0];
+        const anchorNorm = normalizeBulkPhone(groups[anchorGi].header?.bulkPhone || '');
+        const seenExtra = new Set(anchorNorm ? [anchorNorm] : []);
+        const extras = [];
+        giList.forEach((gi) => {
+          if (gi === anchorGi) return;
+          dropGroupIndex.add(gi);
+          const ph = groups[gi].header?.bulkPhone || '';
+          const nrm = normalizeBulkPhone(ph);
+          if (ph && !(nrm && seenExtra.has(nrm))) { extras.push(ph); if (nrm) seenExtra.add(nrm); }
+        });
+        if (extras.length) extraNumsByGroupIndex.set(anchorGi, extras);
+      });
+    })();
+    const BULK_CALL_SVG = '<svg viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M6.6 10.8c1.4 2.8 3.8 5.1 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1C9.6 21 3 14.4 3 6c0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.3.2 2.5.6 3.6.1.3 0 .7-.2 1L6.6 10.8zM16 2h6v6l-2.3-2.3-4 4-1.4-1.4 4-4z"/></svg>';
+    const groupItems = groups.map((group, gi) => {
+      if (dropGroupIndex.has(gi)) return '';
       const header = group.header || {};
       const rowList = Array.isArray(group.rows) ? group.rows : [];
       const phoneText = escapeHtml(formatPhoneRu(header.bulkPhone || '—'));
@@ -6949,6 +7021,15 @@
       const firstRequestUrl = normalizeText(firstRowWithUrl?.url || '');
       const firstRequestId = normalizeRequestId(firstRowWithUrl?.id || rowList.find((row) => normalizeRequestId(row?.id || ''))?.id || '');
       const groupKey = `${idx}:${normalizeBulkPhone(header.bulkPhone || '') || normalizeText(header.bulkPhone || '')}`;
+      const extraNums = extraNumsByGroupIndex.get(gi) || [];
+      const extraNumsHtml = extraNums.map((ph) => {
+        const nrm = normalizeBulkPhone(ph);
+        const txt = escapeHtml(formatPhoneRu(ph));
+        const href = escapeHtml(nrm || ph);
+        const marked = nrm && bulkCalledPhones.has(nrm);
+        const callBtn = href ? `<span class="bulk-call-wrap"><a class="bulk-call-btn${marked ? ' is-called' : ''}" data-phone="${escapeHtml(nrm)}" href="callto:${href}${getBulkCallSipForPhone(nrm)}" title="Позвонить ${txt}">${BULK_CALL_SVG}</a>${marked ? '<span class="bulk-call-check" title="Звонок отмечен">✓</span>' : ''}</span>` : '';
+        return `<span class="bulk-dup-num">, ${txt}</span>${callBtn}`;
+      }).join('');
       return `
         <div class="bulk-phone-group" data-bulk-group-key="${escapeHtml(groupKey)}">
           <div class="bulk-phone-sep">
@@ -6957,6 +7038,7 @@
                 <span class="bulk-phone-title-main">
                   <span>Поиск номера ${idx}: ${phoneText}</span>
                   ${callHref ? `<span class="bulk-call-wrap"><a class="bulk-call-btn${callMarked ? ' is-called' : ''}" data-phone="${escapeHtml(normalizedCallPhone)}" href="callto:${callHref}${tmSipCallSuffix()}" title="Позвонить ${phoneText}"><svg viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M6.6 10.8c1.4 2.8 3.8 5.1 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1C9.6 21 3 14.4 3 6c0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.3.2 2.5.6 3.6.1.3 0 .7-.2 1L6.6 10.8zM16 2h6v6l-2.3-2.3-4 4-1.4-1.4 4-4z"/></svg></a>${callMarked ? '<span class="bulk-call-check" title="Звонок отмечен">✓</span>' : ''}</span>` : ''}
+                  ${extraNumsHtml}
                 </span>
                 <span class="bulk-phone-title-actions">
                   ${canAddForExisting ? `<button type="button" class="bulk-add-top-btn" data-action="bulk-add-request" data-request-url="${escapeHtml(firstRequestUrl)}" data-request-id="${escapeHtml(firstRequestId)}" data-phone="${escapeHtml(header.bulkPhone || '')}" title="Добавить заявку">Добавить заявку</button>` : ''}
@@ -6971,7 +7053,7 @@
           </div>
         </div>
       `;
-    });
+    }).filter(Boolean);
     const leftCount = Math.ceil(groupItems.length / 2);
     const leftHtml = groupItems.slice(0, leftCount).join('');
     const rightHtml = groupItems.slice(leftCount).join('');
@@ -7091,6 +7173,7 @@
       '.c-id',
       '.spill',
       '.work-pill',
+      '.call-pill',
       '.tag-fixed',
       '.c-city',
       '.c-av',

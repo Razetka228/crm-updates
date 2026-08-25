@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
 // @name         CRM Create v11.1 Latest (UI Replace)412412
 // @namespace    bt-lead-centre-ui
-// @version      1.0.1307
+// @version      1.0.1339
 // @description  Полная замена внешнего вида страницы создания заявки
 // @match        https://bt-lead-centre.ru/admin/domain/customer-request/create*
 // @match        https://bt-lead-centre.ru/admin/domain/customer-request/update*
@@ -1531,7 +1531,12 @@ var TM_DEFER_MODERATION_SECONDARY_BLOCKS=true;
           Array.prototype.slice.call(sel.options||[]).forEach(function(o){
             var t=normTxt(o.textContent);if(!t||t==='выберите'||t==='выберите...')return;
             if(t===want){if(!exact)exact=o.value;}
-            else if(!partial&&(t.indexOf(want)>=0||want.indexOf(t)>=0))partial=o.value;
+            else if(!partial){
+              // Числовой код (напр. партнёр «91»): подстрока ОПАСНА — «91» ⊂ «191» дала бы ЧУЖОГО партнёра.
+              // Совпадаем только как ЦЕЛЫЙ токен (границы — не цифра). Нечисловые (город/техника) — как было.
+              if(/^\d+$/.test(want)){ if(new RegExp('(^|\\D)'+want+'(\\D|$)').test(t))partial=o.value; }
+              else if(t.indexOf(want)>=0||want.indexOf(t)>=0)partial=o.value;
+            }
           });
           return exact||partial||'';
         }catch(_){return'';}
@@ -6867,7 +6872,7 @@ function applyWorkToComment(workText,options){
   try{ta.dispatchEvent(new Event('blur',{bubbles:true}));}catch(_e3){}
   syncSourceComment(next,0,{forceNotify:true,forceBlur:true,forceFocusSignal:true});
   setTimeout(function(){syncSourceComment(next,0,{forceNotify:true,forceBlur:true,forceFocusSignal:true});},80);
-}function fmtPhone(inp,e){const before=String(inp.value||'');const digits=getLocalPhoneDigits(before);if(e&&e.inputType==='deleteContentBackward'){if(digits.length===0){inp.value='+7';applyPhoneInputAutoWidth(inp);syncSourcePhones();schedulePhoneShortWidthSync();return;}if(inp._bsNonDigit){inp._bsNonDigit=false;const trimmed=digits.slice(0,-1);inp.value=trimmed.length>=1?formatLocalPhone(trimmed):'+7';applyPhoneInputAutoWidth(inp);syncSourcePhones();schedulePhoneShortWidthSync();return;}}const out=formatLocalPhone(before);inp.value=out;applyPhoneInputAutoWidth(inp);syncSourcePhones();schedulePhoneShortWidthSync();}
+}function fmtPhone(inp,e){const before=String(inp.value||'');const digits=getLocalPhoneDigits(before);if(e&&e.inputType==='deleteContentBackward'){if(digits.length===0){inp.value='+7';applyPhoneInputAutoWidth(inp);syncSourcePhones();schedulePhoneShortWidthSync();try{tmSyncCreatePhoneCallBtn(inp);}catch(_){}return;}if(inp._bsNonDigit){inp._bsNonDigit=false;const trimmed=digits.slice(0,-1);inp.value=trimmed.length>=1?formatLocalPhone(trimmed):'+7';applyPhoneInputAutoWidth(inp);syncSourcePhones();schedulePhoneShortWidthSync();try{tmSyncCreatePhoneCallBtn(inp);}catch(_){}return;}}const out=formatLocalPhone(before);inp.value=out;applyPhoneInputAutoWidth(inp);syncSourcePhones();schedulePhoneShortWidthSync();try{tmSyncCreatePhoneCallBtn(inp);}catch(_){}}
 function initPhoneInputs(){ensureRegionBadge();if(!TM_LAZY_REGION_BRIDGE)initRegionBridge();document.querySelectorAll('#phList input.phone-short').forEach((inp)=>{if(!inp.value.trim())inp.value='+7';else fmtPhone(inp);inp.addEventListener('focus',()=>{if(!inp.value.trim())inp.value='+7';schedulePhoneShortWidthSync();});inp.addEventListener('keydown',(e)=>{if(e.key==='Backspace'){const pos=inp.selectionStart;inp._bsNonDigit=pos>0&&!/\d/.test(inp.value[pos-1]);}});inp.addEventListener('paste',(e)=>{e.preventDefault();var text=(e.clipboardData||window.clipboardData).getData('text');inp.value=text;fmtPhone(inp);});});schedulePhoneShortWidthSync();syncPhoneControls();
 // Следим за скрытым #customer-phone — AHK/CRM/сторонние скрипты могут писать value без input-события
 (function(){
@@ -16975,12 +16980,75 @@ function tmTextareaMinHeight(el){
     var role=String(el&&el.getAttribute&&el.getAttribute('data-tm-ui-role')||'');
     var name=String(el&&el.name||'').toLowerCase();
     var cls=String(el&&el.className||'');
-    if(id==='commClient'||id==='commService'||role==='commClient'||role==='commService')return 66;
+    if(id==='commClient'||id==='commService'||id==='tmActivePartnerComment'||role==='commClient'||role==='commService')return 66;
     if(name==='customerrequest[comments]'||name==='customerrequest[comment]'||name==='customerrequest[comments_service]'||name==='customerrequest[comment_service]')return 66;
     if(/\bmain-comment\b|\bservice-comment\b/.test(cls))return 66;
   }catch(_){}
   return 34;
 }
+function tmEnsureSvcPartnerRowStyle(){
+  try{
+    if(document.getElementById('tmSvcPartnerRowStyle'))return;
+    var st=document.createElement('style');
+    st.id='tmSvcPartnerRowStyle';
+    st.textContent='.tm-svc-partner-row{display:flex;gap:12px;align-items:flex-start;width:100%}'
+      +'.tm-svc-partner-row>.f{flex:1 1 0;min-width:0;margin:0;display:flex;flex-direction:column}'
+      +'.tm-svc-partner-row>.f>.fl{display:flex;align-items:center}';
+    (document.head||document.documentElement).appendChild(st);
+  }catch(_){}
+}
+// ── Блокировка поля «Комментарий партнёра», когда партнёра по факту НЕТ (источник = листовка/пусто). ──
+function tmHasPartnerForComment(){
+  try{
+    // Партнёр «есть», ТОЛЬКО если CRM СОЗДАЛА нативное поле partner_comment (при листовке/без партнёра его нет).
+    var docs=[];
+    try{docs.push(document);}catch(_){}
+    try{if(typeof getBridgeDoc==='function'){var b=getBridgeDoc();if(b&&docs.indexOf(b)===-1)docs.push(b);}}catch(_){}
+    for(var i=0;i<docs.length;i++){
+      var d=docs[i];
+      if(d&&(d.getElementById('customerrequest-partner_comment')||d.querySelector('textarea[name="CustomerRequest[partner_comment]"]')))return true;
+    }
+    return false;
+  }catch(_){return true;}
+}
+function tmPartnerCommentGate(){
+  try{
+    var pcTa=document.getElementById('tmActivePartnerComment')||document.querySelector('.tm-active-partner-comment-field textarea');
+    if(!pcTa)return;
+    if(document.body&&document.body.classList&&(document.body.classList.contains('tm-foreign-work-lock')||document.body.classList.contains('tm-closed-readonly-mode')))return;
+    var has=tmHasPartnerForComment();
+    if(has){
+      if(pcTa.getAttribute('data-tm-nopartner')==='1'){
+        pcTa.removeAttribute('data-tm-nopartner');
+        try{pcTa.readOnly=false;pcTa.removeAttribute('readonly');pcTa.removeAttribute('data-tm-stripe-readonly');pcTa.classList.remove('tm-readonly-stripe');}catch(_){}
+        try{pcTa.style.pointerEvents='';pcTa.removeAttribute('tabindex');}catch(_){}
+        pcTa.placeholder='Комментарий партнёра';
+      }
+    }else{
+      if(pcTa.getAttribute('data-tm-nopartner')!=='1'){
+        pcTa.setAttribute('data-tm-nopartner','1');
+        pcTa.placeholder='';
+        try{if(typeof applyTmReadonlyStripe==='function')applyTmReadonlyStripe(pcTa);}catch(_){}
+        try{pcTa.style.pointerEvents='none';pcTa.setAttribute('tabindex','-1');}catch(_){}
+      }
+    }
+  }catch(_){}
+}
+function tmBindPartnerCommentGate(){
+  try{
+    var pi=document.getElementById('partnerInput');
+    if(pi&&!pi.__tmPcGateBound){pi.__tmPcGateBound=1;['input','change','blur'].forEach(function(ev){pi.addEventListener(ev,function(){setTimeout(tmPartnerCommentGate,0);});});}
+    try{
+      var d=(typeof getBridgeDoc==='function'&&getBridgeDoc())||document;
+      var pSel=(d&&(d.getElementById('customerrequest-partner_id')||d.querySelector('select[name="CustomerRequest[partner_id]"]')))||document.getElementById('customerrequest-partner_id')||document.querySelector('select[name="CustomerRequest[partner_id]"]');
+      if(pSel&&!pSel.__tmPcGateBound){pSel.__tmPcGateBound=1;pSel.addEventListener('change',function(){setTimeout(tmPartnerCommentGate,0);});}
+    }catch(_){}
+    tmPartnerCommentGate();
+  }catch(_){}
+}
+// Служебный/партнёрский в паре (.tm-svc-partner-row) — фикс. РАВНАЯ высота из CSS; чистим inline-height,
+// который мог проставить autosize ДО оборачивания в пару (inline-!important перебивает CSS).
+function tmClearAutosizeInlineHeight(el){try{if(el&&el.style){['height','min-height','max-height'].forEach(function(p){el.style.removeProperty(p);});}}catch(_){}}
 function tmAutosizeTextarea(el){
   try{
     if(!el||String(el.tagName||'').toLowerCase()!=='textarea')return;
@@ -18693,7 +18761,33 @@ function handleClarify(){
   _e95.appendChild(document.createTextNode('0'));
   _e94.appendChild(_e95);
   _e91.appendChild(_e94);
-  _e85.appendChild(_e91);
+  // Комментарий партнёра рядом со служебным (2 колонки 50/50, всегда виден). На create — здесь;
+  // на update/модерации поле добавляет динамический блок. Гейт по create, чтобы не задвоить.
+  if(typeof tmIsCreateRequestPage==='function'&&tmIsCreateRequestPage()){
+    const _ePCrow=document.createElement('div');
+    _ePCrow.className='tm-svc-partner-row';
+    const _ePC=document.createElement('div');
+    _ePC.className='f';
+    const _ePCl=document.createElement('label');
+    _ePCl.className='fl';
+    _ePCl.appendChild(document.createTextNode('Комментарий партнёра'));
+    const _ePCt=document.createElement('textarea');
+    _ePCt.className='ft';
+    _ePCt.id='tmActivePartnerComment';
+    _ePCt.setAttribute('placeholder','Комментарий партнёра');
+    _ePCt.addEventListener('input',function(){try{if(typeof syncSourcePartnerComment==='function')syncSourcePartnerComment(this.value||'',0,{forceBlur:false});}catch(_){}});
+    _ePCt.addEventListener('blur',function(){try{if(typeof syncSourcePartnerComment==='function')syncSourcePartnerComment(this.value||'',0,{forceBlur:true});}catch(_){}});
+    _ePC.appendChild(_ePCl);
+    _ePC.appendChild(_ePCt);
+    _ePCrow.appendChild(_e91);
+    _ePCrow.appendChild(_ePC);
+    try{tmAutosizeTextarea(_e93);tmAutosizeTextarea(_ePCt);}catch(_){}
+    try{tmEnsureSvcPartnerRowStyle();}catch(_){}
+    _e85.appendChild(_ePCrow);
+    try{tmBindPartnerCommentGate();setTimeout(tmBindPartnerCommentGate,300);setTimeout(tmBindPartnerCommentGate,1200);}catch(_){}
+  }else{
+    _e85.appendChild(_e91);
+  }
   _e75.appendChild(_e85);
   _e70.appendChild(_e75);
   _e12.appendChild(_e70);
@@ -20278,6 +20372,8 @@ function handleClarify(){
       });
     }
     var isInWork=!!nativeReturnBtn;
+    // Модерация открыта через карточку клиента + взята в работу → источник заявки = источник карточки.
+    try{if(isInWork&&typeof window.tmApplyCardSourceToModeration==='function')window.tmApplyCardSourceToModeration();}catch(_tmCardSrcHook){}
     function clickNativeReturnFromWork(srcEvent){
       if(!nativeReturnBtn)return false;
       suppressBeforeUnload(9000);
@@ -22753,6 +22849,16 @@ function handleClarify(){
         it.addEventListener('mousedown',function(e){e.preventDefault();});
         it.addEventListener('click',function(e){
           e.stopPropagation();
+          // Интеграция с TG-клиентом: закрытие с причиной → реплей на ОТВЕТ города по этой заявке.
+          // Матчим по ТЕКСТУ причины (r.l) — коды status_change_type у направлений разные, текст одинаков.
+          try {
+            var __tgm={'Клиент отказался от услуг из-за озвученных условий':'Клиент отказался от услуг','Клиенту помощь не актуальна':'Клиенту помощь не актуальна'};
+            var __tgl=String(r.l||'').replace(/\s+/g,' ').trim(), __tgt=__tgm[__tgl], __tgid=(new URL(location.href).searchParams.get('id')||'');
+            if(__tgt && /^\d+$/.test(__tgid)){
+              try{sessionStorage.setItem('__tm_appr_reason_'+__tgid, __tgt);}catch(_ts){}
+              console.log('[TG-интеграция] причина запомнена (реплей после смены статуса): '+__tgt+' (заявка '+__tgid+')');
+            }
+          } catch(_e){}
           _closeNfDrop(function(){_tmReasonUsePreparedOrFallback(kind,r.v);});
         });
         list.appendChild(it);
@@ -23714,7 +23820,33 @@ function handleClarify(){
             // попытке → 500. Ждём 1.5с (форма доподставилась) и полностью повторяем НФ — свежий
             // precheck читает заполненную форму. Один раз на заявку+причину.
             var _crNowFR='';try{_crNowFR=String(crId||'');}catch(_){}
-            if((kind==='nf'||kind==='nf-active'||kind==='nf-closed')&&_tmNfFullRetryGuard!==(_crNowFR+':'+reasonId)){
+            var _willRetryHttp=(kind==='nf'||kind==='nf-active'||kind==='nf-closed')&&_tmNfFullRetryGuard!==(_crNowFR+':'+reasonId);
+            // Оператору — точную причину базы (напр. «Необходимо выбрать другой город, не город …»)
+            // на ФИНАЛЬНОМ провале (не при авто-повторе), иначе показался бы только общий тост.
+            try{
+              r.clone().text().then(function(_t){
+                var _userErr='';
+                try{
+                  var _dd=new DOMParser().parseFromString(_t||'','text/html');
+                  var _vNodes=_dd.querySelectorAll('.error-summary li,.error-summary p,.alert-danger,.alert.alert-danger,.has-error .help-block,.has-error .invalid-feedback,.is-invalid ~ .invalid-feedback');
+                  var _vSeen={},_vLines=[];
+                  for(var _vi=0;_vi<_vNodes.length;_vi++){
+                    var _vt=String(_vNodes[_vi].textContent||'').replace(/\s+/g,' ').replace(/^[×✕✖]\s*/,'').trim();
+                    if(!_vt||!/[а-яё]/i.test(_vt))continue;
+                    if(typeof tmIsSuppressedServerError==='function'&&tmIsSuppressedServerError(_vt))continue;
+                    if(!_vSeen[_vt]){_vSeen[_vt]=1;_vLines.push(_vt);}
+                  }
+                  _userErr=_vLines.join(' • ').slice(0,400);
+                }catch(_){}
+                try{
+                  if(_userErr&&!_willRetryHttp&&typeof tmShowServerErrorNotice==='function'){
+                    tmShowServerErrorNotice(_userErr);
+                    window.__tmNfBaseErrShownAt=Date.now();
+                  }
+                }catch(_){}
+              }).catch(function(){});
+            }catch(_){}
+            if(_willRetryHttp){
               _tmNfFullRetryGuard=_crNowFR+':'+reasonId;
               try{_tmReasonForgetPrep(kind);}catch(_){}
               setTimeout(function(){try{_tmReasonUsePreparedOrFallback(kind,reasonId,fallback);}catch(_){}},1500);
@@ -23729,7 +23861,17 @@ function handleClarify(){
         }).catch(function(err){
           _tmReasonDiag('reason-submit:failed',{kind:kind,reasonId:String(reasonId||''),error:String(err&&err.message||err)});
           try{if(typeof hideCreateLoading==='function')hideCreateLoading(true);}catch(_){}
-          try{if(typeof showToast==='function')showToast('Не удалось отправить выбранную причину');}catch(_){}
+          // При HTTP-ошибке точную причину базы показывает ветка выше (tmShowServerErrorNotice) —
+          // общий тост тогда не дублируем; задержка даёт разбору тела ответа успеть выставить флаг.
+          try{
+            var _httpErr=String((err&&err.message)||'').indexOf('reason submit HTTP ')===0;
+            setTimeout(function(){
+              try{
+                var _shown=window.__tmNfBaseErrShownAt&&(Date.now()-window.__tmNfBaseErrShownAt<6000);
+                if(typeof showToast==='function'&&!(_httpErr&&_shown))showToast('Не удалось отправить выбранную причину');
+              }catch(_){}
+            },_httpErr?500:0);
+          }catch(_){}
         });
       }
       return true;
@@ -26123,7 +26265,7 @@ function handleClarify(){
         mainCommentLbl.appendChild(mainQuickWrap);
       }
 
-      if(hasText(savedPartnerComment)){
+      {   // Комментарий партнёра: показываем ВСЕГДА (даже пустой) — в паре со служебным, 2 колонки 50/50.
         var pcField=document.createElement('div');
         pcField.className='f tm-active-partner-comment-field tm-active-dynamic-comment-field';
         var pcLbl=document.createElement('label');
@@ -26153,8 +26295,24 @@ function handleClarify(){
         modPcEl=pcTa;
         pcField.appendChild(pcLbl);
         pcField.appendChild(pcTa);
-        addDynamicField(pcField);
+        // ── Служебный + партнёрский в ОДНУ строку двумя колонками (50/50) вместо отдельной строки ──
+        if(svcCommentBlock&&svcCommentBlock.parentNode){
+          var tmSvcPartnerRow=document.createElement('div');
+          tmSvcPartnerRow.className='tm-svc-partner-row';
+          tmSvcPartnerRow.style.cssText='display:flex;gap:12px;align-items:flex-start;width:100%;';
+          svcCommentBlock.parentNode.insertBefore(tmSvcPartnerRow,svcCommentBlock);
+          tmSvcPartnerRow.appendChild(svcCommentBlock);
+          tmSvcPartnerRow.appendChild(pcField);
+          try{svcCommentBlock.style.flex='1 1 0';svcCommentBlock.style.minWidth='0';svcCommentBlock.style.margin='0';}catch(_){}
+          pcField.style.flex='1 1 0';pcField.style.minWidth='0';pcField.style.margin='0';
+          svcCommentBlock=tmSvcPartnerRow; last=tmSvcPartnerRow;   // якорь для последующих динам. полей (перенос)
+          try{tmEnsureSvcPartnerRowStyle();}catch(_){}
+          try{var _svcTaEq=(typeof getUiServiceCommentField==='function'&&getUiServiceCommentField())||document.getElementById('commService');tmAutosizeTextarea(_svcTaEq);tmAutosizeTextarea(pcTa);}catch(_){}
+        }else{
+          addDynamicField(pcField);
+        }
         setTimeout(syncPartnerCommentFromBridge,0);
+        try{tmBindPartnerCommentGate();setTimeout(tmBindPartnerCommentGate,300);setTimeout(tmBindPartnerCommentGate,1200);}catch(_){}
       }
 
       if(hasText(savedTransferComment)){
@@ -34469,6 +34627,14 @@ body.tm-cu-v11 #join-accounts{
     function openCustomerHistoryRequestThroughAhkBridge(href,statusText,evt){
       href=String(href||'').trim();
       if(!href)return false;
+      try{
+        if(href.indexOf('/customer-request/update')!==-1 && href.indexOf('tmcardsrc=')===-1){
+          var __cs=(typeof window.__tmReadCardSourceForModeration==='function')?window.__tmReadCardSourceForModeration():null;
+          if(__cs){
+            href=href+(href.indexOf('?')>=0?'&':'?')+'tmcardsrc='+encodeURIComponent(JSON.stringify(__cs));
+          }
+        }
+      }catch(_){}
       var absHref=href;
       try{absHref=new URL(href,location.origin).toString();}catch(_){}
       try{
@@ -35058,3 +35224,259 @@ body.tm-cu-v11 #join-accounts{
 
 })();
 
+
+// === Интеграция с TG-клиентом: закрыл/создал заявку → реплей на ОТВЕТ города по согласованию ===
+// Перенесено из старого TM-двойника content.js (в живом расширении этого не было → реплей не уходил).
+// Реплей уходит ПОСЛЕ реальной смены статуса (модерация/уточнение → Ожидает/Не оформлена). Для веера
+// СПб/Мск клиент маршрутизирует ответ по ГОРОДУ ЗАЯВКИ (city со срезом «(…)», как getCity в Фиксе).
+(function tmApprovalReplyOnStatusChange(){
+  try{
+    if(window.top!==window)return;                                   // только верхний фрейм (не bridge-iframe)
+    var rid=''; try{var q=(new URL(location.href).searchParams.get('id')||'');rid=/^\d+$/.test(q)?q:'';}catch(_){}
+    if(!rid)return;
+    function reqCity(){try{var el=document.getElementById('select2-customerrequest-city_id-container');if(el){var c=String(el.textContent||'').trim();if(c.indexOf('(')!==-1)c=c.split('(')[0].trim();if(c&&!/^выбер/i.test(c))return c;}var s=document.querySelector('select[name="CustomerRequest[city_id]"], #customerrequest-city_id');if(s&&s.options&&s.options[s.selectedIndex]){var c2=String(s.options[s.selectedIndex].text||'').trim();if(c2.indexOf('(')!==-1)c2=c2.split('(')[0].trim();if(c2&&!/^выбер/i.test(c2))return c2;}}catch(_){}return '';}
+    function readStatus(){
+      var s='';
+      try{var b=document.querySelector('.t-title .crm-status-badge, form#customerRequestForm .card-header .crm-status-badge, #reqInfo .crm-status-badge, .t-title .tm-status-badge, .crm-status-badge');s=(b&&(b.textContent||''))||'';}catch(_){}
+      if(!s){try{var h=document.querySelector('#reqInfo, form#customerRequestForm > div.card > div.card-header');s=(h&&h.textContent)||'';}catch(_){}}
+      s=String(s).toLowerCase().replace(/\s+/g,' ');
+      if(/не\s*оформл/.test(s))return'ne_oform';
+      if(/(^|\s)ожидает(\s|$)/.test(s))return'ozhidaet';
+      if(/модерац/.test(s))return'moderation';
+      if(/уточнен/.test(s))return'clarify';
+      return'other';
+    }
+    function send(id,text){ if(!id||!text)return; if(typeof GM_xmlhttpRequest!=='function')return; var _c=reqCity(); try{GM_xmlhttpRequest({method:'GET',url:'http://127.0.0.1:12348/?city='+encodeURIComponent(_c)+'&message='+encodeURIComponent('__APPROVAL_REPLY__:'+id+':'+text)+'&_t='+Date.now(),timeout:3000,onload:function(){},onerror:function(){},ontimeout:function(){}});}catch(_){} }
+    var PREV='__tm_appr_prevstatus_'+rid, REASON='__tm_appr_reason_'+rid, SENT='__tm_appr_sent_'+rid;
+    function check(){
+      var cur=readStatus(); if(cur==='other')return;
+      var prev=''; try{prev=sessionStorage.getItem(PREV)||'';}catch(_){}
+      var sent=''; try{sent=sessionStorage.getItem(SENT)||'';}catch(_){}
+      var fromAgree=(prev==='moderation'||prev==='clarify');
+      if(fromAgree&&cur==='ozhidaet'&&sent!=='ozhidaet'){
+        send(rid,rid);
+        try{sessionStorage.setItem(SENT,'ozhidaet');sessionStorage.removeItem(REASON);}catch(_){}
+        try{console.log('[TG-интеграция] статус → Ожидает (создана): реплей id '+rid);}catch(_){}
+      } else if(fromAgree&&cur==='ne_oform'&&sent!=='ne_oform'){
+        var rt=''; try{rt=sessionStorage.getItem(REASON)||'';}catch(_){}
+        if(rt){ send(rid,rt); try{sessionStorage.setItem(SENT,'ne_oform');}catch(_){} try{console.log('[TG-интеграция] статус → Не оформлена: реплей «'+rt+'» id '+rid);}catch(_){} }
+      }
+      if(cur==='moderation'||cur==='clarify'){ try{sessionStorage.removeItem(SENT);}catch(_){} }
+      try{sessionStorage.setItem(PREV,cur);}catch(_){}
+    }
+    check();
+    var n=0,iv=setInterval(function(){n++;try{check();}catch(_){}if(n>=15)clearInterval(iv);},700);
+  }catch(_){}
+})();
+
+// ── Смена партнёра/листовки заявки на модерации на источник КАРТОЧКИ КЛИЕНТА ──
+// Открыл модерацию ЧЕРЕЗ «Историю заказов» карточки клиента → ПОСЛЕ взятия в работу (isInWork) ставим
+// партнёра/листовку заявки = источник карточки клиента (напр. партнёр 685 вместо старого 10). Переживает
+// перезагрузку ЭТОЙ вкладки (sessionStorage), НО не применяется, если заявку открыли из другого места
+// (нет tmcardsrc в URL → нет записи в sessionStorage вкладки).
+(function tmCardSourceToModerationFeature(){
+  try{
+    if(window.__tmCardSrcModBound)return; window.__tmCardSrcModBound=true;
+    function reqIdFromUrl(){try{return (String(location.search||'').match(/[?&]id=(\d+)/)||[])[1]||'';}catch(_){return '';}}
+
+    // 1) ЗАХВАТ источника карточки клиента при клике по id заявки в её «Истории заказов».
+    function readCardSource(){
+      try{
+        // Точные id источника из нативной ссылки «Добавить заявку» (?...&partner_id=&advert_id=&city_id=).
+        var href='';
+        try{
+          var cands=Array.from(document.querySelectorAll('a[href*="/customer-request/create"]'));
+          for(var _ci=0;_ci<cands.length;_ci++){var _h=cands[_ci].getAttribute('href')||cands[_ci].href||'';if(/[?&](city_id|advert_id|partner_id)=/.test(_h)){href=_h;break;}}
+          if(!href&&cands.length)href=cands[0].getAttribute('href')||cands[0].href||'';
+        }catch(_){}
+        function hp(name){try{var m=String(href).match(new RegExp('[?&]'+name+'=([^&#]+)'));if(m&&m[1]){var v=decodeURIComponent(m[1]);if(v&&v!=='0')return v;}}catch(_){}return '';}
+        var pv=hp('partner_id'), av=hp('advert_id'), ci=hp('city_id');
+        // Текст бейджа — вид + номер + описание (fallback к матчу по тексту).
+        var t=String(window.__tmCuSourceText||'').trim();
+        if(!t){var el=document.querySelector('.tm-cu-topbar-source, #tm-customer-source-button');t=el?String(el.textContent||'').replace(/\s+/g,' ').trim():'';}
+        var low=t.toLowerCase().replace(/ё/g,'е');
+        var kind=pv?'partner':(av?'rk':(/партн/.test(low)?'partner':(/(лист|рк|реклам|источ)/.test(low)?'rk':'')));
+        if(!kind)return null;
+        var code=(t.match(/\d+/)||[''])[0].replace(/^0+(?=\d)/,'');
+        var desc=t.replace(/^[^0-9A-Za-zА-Яа-яЁё]*(?:партн[её]р|партнер|рк|листовка|источник|реклама)?\s*[:№#-]?\s*/i,'').trim();
+        return {k:kind,c:code,t:(desc||t).slice(0,80),pv:pv,av:av,ci:ci};
+      }catch(_){return null;}
+    }
+    try{window.__tmReadCardSourceForModeration=readCardSource;}catch(_){}
+    document.addEventListener('mousedown',function(e){
+      try{
+        var a=e&&e.target&&e.target.closest&&e.target.closest('a[href*="/customer-request/update"]');
+        if(!a)return;
+        var href=a.getAttribute('href')||'';
+        if(href.indexOf('/customer-request/update')===-1)return;
+        var src=readCardSource();
+        if(!src){return;}
+        var base=href.replace(/([?&])tmcardsrc=[^&]*/,'$1').replace(/[?&]$/,'');
+        var payload=encodeURIComponent(JSON.stringify(src));
+        a.setAttribute('href', base+(base.indexOf('?')>=0?'&':'?')+'tmcardsrc='+payload);
+      }catch(_){}
+    },true);
+
+    // 2) ПРИЁМ на модерации: URL(tmcardsrc) → sessionStorage ЭТОЙ вкладки + чистим URL.
+    (function(){
+      try{
+        if(String(location.pathname||'').indexOf('/customer-request/update')===-1)return;
+        var id=reqIdFromUrl(); if(!id)return;
+        var m=String(location.search||'').match(/[?&]tmcardsrc=([^&]+)/);
+        if(m){
+          try{sessionStorage.setItem('__tmCardSrc_'+id, decodeURIComponent(m[1]));}catch(_){}
+          try{var clean=location.href.replace(/([?&])tmcardsrc=[^&]*/,'$1').replace(/[?&]$/,'').replace(/\?$/,'');history.replaceState(history.state,document.title,clean);}catch(_){}
+        }
+      }catch(_){}
+    })();
+
+    // 3) ПРИМЕНЕНИЕ: ставим источник карточки в нативный partner_id / advert_id (зовётся из хука при isInWork).
+    function optByNumericToken(sel,code){
+      if(!sel||!sel.options)return null;
+      var want=String(code||'').replace(/^0+(?=\d)/,''); if(!want)return null;
+      var re=new RegExp('(^|\\D)'+want+'(\\D|$)');
+      for(var i=0;i<sel.options.length;i++){
+        var o=sel.options[i]; if(!o.value)continue;
+        var tt=String(o.text||'').trim();
+        var tn=(tt.match(/\d+/)||[''])[0].replace(/^0+(?=\d)/,'');
+        if(re.test(tt))return o;
+      }
+      return null;
+    }
+    function optByText(sel,desc){
+      if(!sel||!sel.options||!desc)return null;
+      function nrm(s){return String(s||'').toLowerCase().replace(/ё/g,'е').replace(/\s+/g,' ').trim();}
+      var want=nrm(desc);
+      for(var i=0;i<sel.options.length;i++){var o=sel.options[i];if(o.value&&nrm(o.text)===want)return o;}
+      return null;
+    }
+    function optByValue(sel,val){
+      if(!sel||!sel.options||val===''||val==null)return null;
+      val=String(val);
+      for(var i=0;i<sel.options.length;i++){if(String(sel.options[i].value)===val)return sel.options[i];}
+      return null;
+    }
+    function setSel(sel,opt){ // → true, если реально сменилось
+      if(!sel||!opt)return false;
+      if(String(sel.value)===String(opt.value))return false;
+      sel.value=opt.value;try{sel.dispatchEvent(new Event('change',{bubbles:true}));}catch(_){}
+      return true;
+    }
+    function clearSel(sel){if(sel&&String(sel.value||'')!==''){sel.value='';try{sel.dispatchEvent(new Event('change',{bubbles:true}));}catch(_){}}}
+    // Нативный select ищем И в основном документе, И в bridge-iframe (на модерации он в основном).
+    function findNativeSel(idA){
+      var nm=idA.replace('customerrequest-','');
+      var docs=[document];
+      try{if(typeof getBridgeDoc==='function'){var b=getBridgeDoc();if(b&&b!==document)docs.push(b);}}catch(_){}
+      var loose=null;
+      for(var i=0;i<docs.length;i++){try{var el=docs[i].getElementById(idA)||docs[i].querySelector('select[name="CustomerRequest['+nm+']"]');if(el){if(el.options&&el.options.length>1)return el;if(!loose)loose=el;}}catch(_){}}
+      return loose;
+    }
+    // Город на модерации: нативный customerrequest-city_id по value (для листовки с city_id).
+    function applyModerCity(cityId){
+      try{
+        if(!cityId)return false;
+        cityId=String(cityId);
+        var cs=findNativeSel('customerrequest-city_id');
+        var opt=optByValue(cs,cityId);
+        var cityText=opt?String(opt.text||'').trim():'';
+        if(!cityText){var ac0=document.getElementById('addrCity');var ao=optByValue(ac0,cityId);if(ao)cityText=String(ao.text||'').trim();}
+        if(!cityText){return false;}
+        var before=cs?String(cs.value||''):'';
+        // зеркало расширения addrCity* (чтобы не откатило на сохранении)
+        try{
+          var acEl=document.getElementById('addrCity'); if(acEl){acEl.value=cityId;}
+          var acIn=document.getElementById('addrCityInput'); if(acIn){acIn.value=cityText;try{acIn.dataset.cityId=cityId;}catch(_){}}
+          var acBt=document.getElementById('addrCityBtnText'); if(acBt){acBt.textContent=cityText;try{acBt.classList.remove('ph');}catch(_){}}
+        }catch(_){}
+        // подпись select2
+        try{var doc=(cs&&cs.ownerDocument)||document;var cont=doc.querySelector('#select2-customerrequest-city_id-container');if(cont){cont.textContent=cityText;cont.setAttribute('title',cityText);}}catch(_){}
+        // состояние расширения (консистентность addrCity)
+        try{if(typeof tmApplyBulkCity==='function')tmApplyBulkCity(cityText,cityId);}catch(_){}
+        // ГЛАВНОЕ: нативный пересчёт «Время города». Ручная смена шлёт change+select2:select →
+        // CRM делает GET /customer-request/city-timetable?city_id=... и обновляет метку. Шлём те же
+        // события через emitBridgeSelectEvents ПОВТОРНО (пока jQuery/select2 не готовы), стоп когда метка сменилась.
+        try{
+          function _tlt(){try{var l=document.querySelector('.field-customerrequest-opened_at label')||document.querySelector('[class*="opened_at"] label');return l?String(l.textContent||''):'';}catch(_){return '';}}
+          function _cthm(){var m=_tlt().match(/Время города\s*:?\s*(\d{1,2}:\d{2})/i);return m?m[1]:'';}
+          var _base=_cthm(); var _fires=0; var _cap=_base?8:3;
+          (function _fire(){
+            _fires++;
+            try{
+              var jq=window.jQuery||window.$;
+              if(cs){
+                if(jq){try{jq(cs).val(cityId);}catch(e0){cs.value=cityId;}}else{cs.value=cityId;}
+                if(String(cs.value||'')!==cityId){try{cs.value=cityId;}catch(e1){}}
+                if(typeof emitBridgeSelectEvents==='function')emitBridgeSelectEvents(cs,window);
+                else{try{cs.dispatchEvent(new Event('change',{bubbles:true}));}catch(e2){}}
+              }
+            }catch(_){}
+            var cur=_cthm();
+            var done=(cur&&_base!==''&&cur!==_base);
+            if(!done&&_fires<_cap){setTimeout(_fire,500);}
+            
+          })();
+        }catch(_){}
+        var after=cs?String(cs.value||''):'';
+        return after===cityId&&after!==before;
+      }catch(_){return false;}
+    }
+    window.tmApplyCardSourceToModeration=function(){
+      try{
+        var id=reqIdFromUrl(); if(!id)return;
+        if(window['__tmCardSrcDone_'+id])return;                 // в этой жизни страницы уже применяли — не воюем с оператором (reload сбросит)
+        var raw=''; try{raw=sessionStorage.getItem('__tmCardSrc_'+id)||'';}catch(_){}
+        if(!raw)return;
+        var data=null; try{data=JSON.parse(raw);}catch(_){}
+        if(!data||!data.k)return;
+        if(window.__tmCardSrcApplyBusy)return;                    // не плодим параллельные поллы (иначе очистка «ползёт» секундами)
+        window.__tmCardSrcApplyBusy=true;
+        var attempts=0;
+        (function tryApply(){
+          attempts++;
+          // ГЕЙТ: применяем ТОЛЬКО если заявка в работе у МЕНЯ (не у другого диспетчера).
+          var __foreign=!!(window.__tmForeignWorkLock)||!!(document.body&&document.body.classList&&document.body.classList.contains('tm-foreign-work-lock'))||!!document.querySelector('#tmInWorkStateCard.tm-in-work-other');
+          if(__foreign){window['__tmCardSrcDone_'+id]=true;window.__tmCardSrcApplyBusy=false;return;}
+          var __mine=!!document.querySelector('#tmInWorkStateCard.tm-in-work-mine');
+          if(!__mine&&attempts<20){setTimeout(tryApply,300);return;}   // ждём определения владельца (или пока станет «чужая»)
+          var pSel=findNativeSel('customerrequest-partner_id');
+          var aSel=findNativeSel('customerrequest-advert_id');
+          var pi=document.getElementById('partnerInput');
+          var ai=document.getElementById('advInput');
+          var tgt=data.k==='partner'?pSel:aSel;
+          if((!tgt||!tgt.options||tgt.options.length<=1)&&attempts<25){setTimeout(tryApply,300);return;}
+          if(!tgt||!tgt.options||tgt.options.length<=1){
+            window.__tmCardSrcApplyBusy=false; return;            // не ставим Done → следующий вызов хука попробует снова
+          }
+          var changed=false, label='';
+          if(data.k==='partner'){
+            var opt=optByValue(pSel,data.pv)||optByNumericToken(pSel,data.c)||optByText(pSel,data.t);
+            if(aSel)clearSel(aSel);
+            if(ai){ai.value='';try{ai.dispatchEvent(new Event('input',{bubbles:true}));}catch(_){}}
+            if(pi&&typeof tmSetCreateSourceMutualLock==='function')tmSetCreateSourceMutualLock(pi,false);
+            if(opt){
+              if(setSel(pSel,opt))changed=true;
+              if(pi){var nt=String(opt.text||'').trim();if(pi.value!==nt){pi.value=nt;changed=true;}}
+              label='партнёр '+data.c;
+            }else if(typeof showToast==='function'){try{showToast('Партнёр «'+data.c+'» не найден в справочнике');}catch(_){}}
+            if(ai&&typeof tmSetCreateSourceMutualLock==='function')tmSetCreateSourceMutualLock(ai,true);
+          }else if(data.k==='rk'){
+            var optA=optByValue(aSel,data.av)||optByText(aSel,data.t)||optByNumericToken(aSel,data.c);
+            if(pSel)clearSel(pSel);
+            if(pi){pi.value='';try{pi.dispatchEvent(new Event('input',{bubbles:true}));}catch(_){}}
+            if(ai&&typeof tmSetCreateSourceMutualLock==='function')tmSetCreateSourceMutualLock(ai,false);
+            if(optA){
+              if(setSel(aSel,optA))changed=true;
+              if(ai){var nt2=String(optA.text||'').trim();if(ai.value!==nt2){ai.value=nt2;changed=true;}}
+              label='листовка '+(data.t||data.c);
+            }else if(typeof showToast==='function'){try{showToast('Листовка «'+(data.t||data.c)+'» не найдена в справочнике');}catch(_){}}
+            if(data.ci){try{if(applyModerCity(data.ci)){changed=true;label=(label?label+' + город':'город');}}catch(_){}}
+            if(pi&&typeof tmSetCreateSourceMutualLock==='function')tmSetCreateSourceMutualLock(pi,true);
+          }
+          window['__tmCardSrcDone_'+id]=true;                     // применили (или подтвердили) — в этой жизни страницы больше не трогаем
+          window.__tmCardSrcApplyBusy=false;
+        })();
+      }catch(_){window.__tmCardSrcApplyBusy=false;}
+    };
+  }catch(_){}
+})();

@@ -349,7 +349,7 @@
 // ==UserScript==
 // @name         CRM Create v11.1 Latest (UI Replace)4124125215231234
 // @namespace    kp-lead-centre-ui
-// @version      1.0.1170
+// @version      1.0.1171
 // @description  Полная замена внешнего вида страницы создания заявки
 // @match        https://kp-lead-centre.ru/admin/domain/customer-request/create*
 // @match        https://kp-lead-centre.ru/admin/domain/customer-request/update*
@@ -20234,8 +20234,10 @@ function handleClarify(){
             var __tgm={'Клиент отказался от услуг из-за озвученных условий':'Клиент отказался от услуг','Клиенту помощь не актуальна':'Клиенту помощь не актуальна'};
             var __tgl=String(r.l||'').replace(/\s+/g,' ').trim(), __tgt=__tgm[__tgl], __tgid=(new URL(location.href).searchParams.get('id')||'');
             if(__tgt && /^\d+$/.test(__tgid)){
-              GM_xmlhttpRequest({method:'GET',url:'http://127.0.0.1:12348/?city=kp&message='+encodeURIComponent('__APPROVAL_REPLY__:'+__tgid+':'+__tgt)+'&_t='+Date.now(),timeout:3000,onload:function(){},onerror:function(){},ontimeout:function(){}});
-              console.log('[TG-интеграция] исход закрытия → реплей: '+__tgt+' (заявка '+__tgid+')');
+              // НЕ шлём сразу: запоминаем причину, реплей уйдёт ПОСЛЕ реальной смены статуса на «Не оформлена»
+              // (см. tmApprovalReplyOnStatusChange). Раньше слалось по клику — до сохранения.
+              try{sessionStorage.setItem('__tm_appr_reason_'+__tgid, __tgt);}catch(_ts){}
+              console.log('[TG-интеграция] причина запомнена (реплей после смены статуса): '+__tgt+' (заявка '+__tgid+')');
             }
           } catch(_e){}
           _closeNfDrop(function(){_tmReasonUsePreparedOrFallback(kind,r.v);});
@@ -32173,6 +32175,51 @@ body.tm-cu-v11 #join-accounts{
   }
 
   if (__isCreatePage || (!__isUpdatePage && !__hasPendingNf && !__isCustomerCardUpdatePage)) { boot(); }
+
+  // === Отложенный approval-reply: реплей «итога согласования» уходит ПОСЛЕ реальной смены статуса ===
+  // модерация/уточнение → Ожидает = заявка создана → шлём id; → Не оформлена → шлём текст причины.
+  // Раньше слалось СРАЗУ по клику причины/«Создать» (до сохранения) — могло уйти при несохранении.
+  (function tmApprovalReplyOnStatusChange(){
+    try{
+      var rid=''; try{var q=(new URL(location.href).searchParams.get('id')||'');rid=/^\d+$/.test(q)?q:'';}catch(_){}
+      if(!rid)return;
+      function readStatus(){
+        var s='';
+        try{var b=document.querySelector('.t-title .crm-status-badge, form#customerRequestForm .card-header .crm-status-badge, #reqInfo .crm-status-badge, .t-title .tm-status-badge, .crm-status-badge');s=(b&&(b.textContent||''))||'';}catch(_){}
+        if(!s){try{var h=document.querySelector('#reqInfo, form#customerRequestForm > div.card > div.card-header');s=(h&&h.textContent)||'';}catch(_){}}
+        s=String(s).toLowerCase().replace(/\s+/g,' ');
+        if(/не\s*оформл/.test(s))return'ne_oform';
+        if(/(^|\s)ожидает(\s|$)/.test(s))return'ozhidaet';
+        if(/модерац/.test(s))return'moderation';
+        if(/уточнен/.test(s))return'clarify';
+        return'other';
+      }
+      // Город заявки (как getCity в Фиксе: select2 → select, со срезом «(…)»). Для веера СПб/Мск клиент
+      // по этому городу выберет группу и отреплеит на ответ, пришедший ИМЕННО в ней (не угадывая).
+      function reqCity(){try{var el=document.getElementById('select2-customerrequest-city_id-container');if(el){var c=String(el.textContent||'').trim();if(c.indexOf('(')!==-1)c=c.split('(')[0].trim();if(c&&!/^выбер/i.test(c))return c;}var s=document.querySelector('select[name="CustomerRequest[city_id]"], #customerrequest-city_id');if(s&&s.options&&s.options[s.selectedIndex]){var c2=String(s.options[s.selectedIndex].text||'').trim();if(c2.indexOf('(')!==-1)c2=c2.split('(')[0].trim();if(c2&&!/^выбер/i.test(c2))return c2;}}catch(_){}return '';}
+      function send(id,text){ if(!id||!text)return; var _c=reqCity(); try{GM_xmlhttpRequest({method:'GET',url:'http://127.0.0.1:12348/?city='+encodeURIComponent(_c)+'&message='+encodeURIComponent('__APPROVAL_REPLY__:'+id+':'+text)+'&_t='+Date.now(),timeout:3000,onload:function(){},onerror:function(){},ontimeout:function(){}});}catch(_){} }
+      var PREV='__tm_appr_prevstatus_'+rid, REASON='__tm_appr_reason_'+rid, SENT='__tm_appr_sent_'+rid;
+      function check(){
+        var cur=readStatus(); if(cur==='other')return;
+        var prev=''; try{prev=sessionStorage.getItem(PREV)||'';}catch(_){}
+        var sent=''; try{sent=sessionStorage.getItem(SENT)||'';}catch(_){}
+        var fromAgree=(prev==='moderation'||prev==='clarify');
+        if(fromAgree&&cur==='ozhidaet'&&sent!=='ozhidaet'){
+          send(rid,rid);
+          try{sessionStorage.setItem(SENT,'ozhidaet');sessionStorage.removeItem(REASON);}catch(_){}
+          try{console.log('[TG-интеграция] статус → Ожидает (создана): реплей id '+rid);}catch(_){}
+        } else if(fromAgree&&cur==='ne_oform'&&sent!=='ne_oform'){
+          var rt=''; try{rt=sessionStorage.getItem(REASON)||'';}catch(_){}
+          if(rt){ send(rid,rt); try{sessionStorage.setItem(SENT,'ne_oform');}catch(_){} try{console.log('[TG-интеграция] статус → Не оформлена: реплей «'+rt+'» id '+rid);}catch(_){} }
+        }
+        // сброс «отправлено» при новом круге согласования; запоминаем текущий статус для следующей загрузки
+        if(cur==='moderation'||cur==='clarify'){ try{sessionStorage.removeItem(SENT);}catch(_){} }
+        try{sessionStorage.setItem(PREV,cur);}catch(_){}
+      }
+      check();
+      var n=0,iv=setInterval(function(){n++;try{check();}catch(_){}if(n>=15)clearInterval(iv);},700);
+    }catch(_){}
+  })();
 
 })();
 
