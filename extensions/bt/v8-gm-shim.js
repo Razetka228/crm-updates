@@ -1,7 +1,7 @@
 // MAIN-world shim for the CRM v8 userscript converted to an extension.
 // The original Tampermonkey grant @grant GM_setClipboard is the only GM API
 // this script uses, so we just provide a self-contained implementation here.
-// Runs BEFORE content.js (see manifest content_scripts order).
+// Runs BEFORE userscript-main.js (see manifest content_scripts order). NB: content.js is DEAD (not in manifest).
 (function installCrmV8GmShim() {
   "use strict";
 

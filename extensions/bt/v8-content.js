@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
 // @name         KP Lead Centre CRM v8 (Live Redesign) до расширения 12124142
 // @namespace    https://bt-lead-centre.ru/
-// @version      3.1.106
+// @version      3.1.107
 // @description  Интерфейс crm_v8.html с живыми данными из таблицы #cr-grid-table.
 // @author       Codex
 // @match        https://bt-lead-centre.ru/admin/domain/customer-request/index*
@@ -7027,7 +7027,7 @@
         const txt = escapeHtml(formatPhoneRu(ph));
         const href = escapeHtml(nrm || ph);
         const marked = nrm && bulkCalledPhones.has(nrm);
-        const callBtn = href ? `<span class="bulk-call-wrap"><a class="bulk-call-btn${marked ? ' is-called' : ''}" data-phone="${escapeHtml(nrm)}" href="callto:${href}${getBulkCallSipForPhone(nrm)}" title="Позвонить ${txt}">${BULK_CALL_SVG}</a>${marked ? '<span class="bulk-call-check" title="Звонок отмечен">✓</span>' : ''}</span>` : '';
+        const callBtn = href ? `<span class="bulk-call-wrap"><a class="bulk-call-btn${marked ? ' is-called' : ''}" data-phone="${escapeHtml(nrm)}" href="callto:${href}${tmSipCallSuffix()}" title="Позвонить ${txt}">${BULK_CALL_SVG}</a>${marked ? '<span class="bulk-call-check" title="Звонок отмечен">✓</span>' : ''}</span>` : '';
         return `<span class="bulk-dup-num">, ${txt}</span>${callBtn}`;
       }).join('');
       return `
