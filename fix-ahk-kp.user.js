@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
 // @name         Фикс базы + ахк
 // @namespace    http://tampermonkey.net/
-// @version      29.15
+// @version      29.18
 // @description  ОБЪЕДИНЕННЫЙ СКРИПТ: + Фикс кнопки "Применить фильтр" + Кастомное меню услуг + Логика кнопок (create/update)
 // @author       кто прочитатет тот умрет
 // @match        https://kp-lead-centre.ru/admin/domain/customer-request/update*
@@ -39,6 +39,7 @@
     console.log('[Фикс КП 28.4] партнёр 759 добавлен в список авто-«Отзыв» (REVIEW_SHOWN_ALLOWED)');
     console.log('[Фикс КП 28.5] веер СПб/МСК на соглас шлёт во ВСЕ чаты СРАЗУ (без задержек по очереди) — текст идёт напрямую в Telegram');
     console.log('[Фикс КП 29.0] интеграция с TG-клиентом: закрыл/создал заявку → авто-реплей на ОТВЕТ города по согласованию (согласование помечается #REQ<id>#, привязка mid→заявка на клиенте; закрытие «Клиент отказался»/«Помощь не актуальна» + «Создать»; веер СПб/МСК ТЕПЕРЬ включён — реплей маршрутизируется по городу заявки) + веер помечается #NV# (клиент не открывает чат, 300мс-таймер убран)');
+    console.log('[Фикс КП 29.17] согласование метится #REQ<id>@<база># — клик по уведомлению об ответе города открывает заявку РОВНО в её базе (kp/bt/mnc из хоста CRM, не угадывается по названию чата)');
 
     // ===== ВРЕМЕННАЯ ДИАГНОСТИКА ПЕРЕНОСА АДРЕСА (2026-07-12) — ВЕРХНИЙ УРОВЕНЬ =====
     // На верхнем уровне (до host-гейта yandex), чтобы работала И на картах, И на вкладке заявки.
@@ -508,7 +509,8 @@
     // Используется для всех sendToAHK вызовов.
     const AHK_CITY_REPLACEMENTS = {
         'Салават': 'Стерлитамак',
-        'Энгельс': 'Саратов',
+        // Энгельс и Саратов — РАЗНЫЕ филиалы: НЕ переадресуем Энгельс→Саратов,
+        // пусть ТГ ищет «Энгельс» отдельно, как остальные города.
         'Зеленодольск': 'Казань',
         'Выборг': 'СПб 2',
         'Элиста': 'Волгодонск',
@@ -534,8 +536,7 @@
             switch (normalizedCity) {
                 case 'Салават':
                     return 'Стерлитамак';
-                case 'Энгельс':
-                    return 'Саратов';
+                // Энгельс не переадресуем в Саратов (разные филиалы) — ищем «Энгельс» отдельно.
                 default:
                     break;
             }
@@ -13409,7 +13410,7 @@ function sendToAHK(city, message) {
         // КАЖДОЙ группе веера, а реплей-исход маршрутизируется по ГОРОДУ ЗАЯВКИ (совпадение названия группы).
         if (!/^__/.test(message) && !/^#REQ/.test(message) && /Берем\?|На когда\?|бел[ао]я\s*заявк/i.test(message)) {
             const rid = new URL(location.href).searchParams.get('id') || '';
-            if (/^\d+$/.test(rid)) message = '#REQ' + rid + '#' + message;
+            if (/^\d+$/.test(rid)) { const _h = location.hostname; const _dir = _h.indexOf('bt-lead') >= 0 ? 'bt' : (_h.indexOf('mnc-lead') >= 0 ? 'mnc' : 'kp'); message = '#REQ' + rid + '@' + _dir + '#' + message; }
         }
     } catch (e) {}
 
@@ -14424,12 +14425,15 @@ function normalizeWhiteRequestAlertText(text) {
         return !!(s && String(s.value || '').trim());
     }
     function tmSpbSentKey(requestId) { return '__tm_spb_clarify_sent_' + String(requestId || 'noid'); }
+    // [FIX веер] Прогресс веера листовки (в какие чаты уже слали) хранится ПЕРСИСТЕНТНО по заявке —
+    // localStorage, а НЕ sessionStorage: иначе после закрытия/перезахода заявки прогресс терялся
+    // и веер снова слал в 1-й город (район) вместо остальных. localStorage переживает закрытие вкладки.
     function tmSpbReadSent(requestId) {
-        try { const raw = sessionStorage.getItem(tmSpbSentKey(requestId)); return raw ? JSON.parse(raw) : []; }
+        try { const raw = localStorage.getItem(tmSpbSentKey(requestId)); return raw ? JSON.parse(raw) : []; }
         catch (_) { return []; }
     }
     function tmSpbWriteSent(requestId, arr) {
-        try { sessionStorage.setItem(tmSpbSentKey(requestId), JSON.stringify(arr || [])); } catch (_) {}
+        try { localStorage.setItem(tmSpbSentKey(requestId), JSON.stringify(arr || [])); } catch (_) {}
     }
     async function tmSpbSendSequential(chats, text) {
         // Раньше слали ПО ОЧЕРЕДИ с паузой (наследие AHK-клавиатуры: чат искался по одному).
