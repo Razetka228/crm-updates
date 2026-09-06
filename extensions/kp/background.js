@@ -208,6 +208,94 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (rec.city) await sendClear(rec.city, rec.requestId, "close");
   });
 })();
+
+/* ============================================================
+ * ОДНА ЗАЯВКА = ОДНА ВКЛАДКА (дедуп вкладок карточки заявки)
+ * Заявка открывается из уведомления согласования (Telegram-клиент, shell.openExternal) или вручную.
+ * Если вкладка с ЭТОЙ заявкой (тот же id) уже открыта — не плодим новую: закрываем свежесозданный дубль
+ * и переключаемся на существующую. Если существующая уже активна и её окно в фокусе — фокус НЕ трогаем
+ * (не выдёргиваем браузер, заявка и так перед глазами), только убираем дубль. Нет вкладки — всё как было.
+ * ============================================================ */
+(() => {
+  "use strict";
+  const RE_REQ_UPDATE = //admin/domain/customer-request/update/i;
+  function reqIdOf(u) { try { return new URL(u).searchParams.get("id") || ""; } catch (e) { return ""; } }
+
+  chrome.webNavigation.onCommitted.addListener(async (d) => {
+    try {
+      if (d.frameId !== 0) return;                       // только главный фрейм вкладки
+      if (!RE_REQ_UPDATE.test(d.url)) return;            // только страница заявки .../customer-request/update
+      const id = reqIdOf(d.url);
+      if (!id) return;
+      const tabs = await chrome.tabs.query({});
+      const dup = tabs.find((t) => t.id !== d.tabId && t.url && RE_REQ_UPDATE.test(t.url) && reqIdOf(t.url) === id);
+      if (!dup) return;                                  // этой заявки в других вкладках нет -> оставляем новую как есть
+      try { await chrome.tabs.remove(d.tabId); } catch (e) { /* */ }   // только что открытую (дубль) закрываем
+      // переключаемся на уже открытую, ТОЛЬКО если она не активна / её окно не в фокусе (иначе не дёргаем браузер)
+      let win = null; try { win = await chrome.windows.get(dup.windowId); } catch (e) { /* */ }
+      const alreadyFront = !!(dup.active && win && win.focused);
+      if (!alreadyFront) {
+        try { await chrome.tabs.update(dup.id, { active: true }); } catch (e) { /* */ }
+        try { if (dup.windowId != null) await chrome.windows.update(dup.windowId, { focused: true }); } catch (e) { /* */ }
+      }
+    } catch (e) { /* */ }
+  });
+})();
+
+/* ============================================================
+ * «Добить» + уход с заявки на уточнении → городу «Клиент возможно свяжется позже».
+ * clear-on-close.js регистрирует {requestId, city, text} на вкладке, пока статус «уточнение» и в
+ * служебном комментарии есть «добить». На ЗАКРЫТИИ вкладки / уходе со страницы (не reload, не та же
+ * заявка) шлём __APPROVAL_REPLY__ с keepalive — переживает закрытие. Клиент реплеит на ОТВЕТ города.
+ * ============================================================ */
+(() => {
+  "use strict";
+  const AHK_BASE = "http://127.0.0.1:12348/";
+  const MSG = "crm-dobit-reply";
+  const keyFor = (tabId) => "dobit_tab_" + tabId;
+  const RE_REQUEST = /\/admin\/domain\/customer-request\/update/i;
+  function normUrl(u) { try { const x = new URL(u); return x.origin + x.pathname + x.search; } catch (e) { return String(u || "").split("#")[0]; } }
+  const getRec = async (id) => { const k = keyFor(id); const g = await chrome.storage.session.get(k); return g ? g[k] : null; };
+  const setRec = (id, rec) => chrome.storage.session.set({ [keyFor(id)]: rec });
+  const delRec = (id) => chrome.storage.session.remove(keyFor(id));
+  async function sendReply(rec, reason) {
+    if (!rec || !rec.requestId || !rec.text) return;
+    const sentKey = "dobit_sent_" + rec.requestId;
+    try { const g = await chrome.storage.local.get(sentKey); if (g && g[sentKey]) { console.log("[dobit-reply] уже отправляли по", rec.requestId, "- пропуск"); return; } } catch (_) { /* */ }  // ОДИН РАЗ на заявку (переживает повторные открытия страницы)
+    try { await chrome.storage.local.set({ [sentKey]: Date.now() }); } catch (_) { /* */ }  // помечаем ДО отправки → гарантия «один раз»
+    const url = AHK_BASE +
+      "?city=" + encodeURIComponent(rec.city || "") +
+      "&message=" + encodeURIComponent("__APPROVAL_REPLY__:" + rec.requestId + ":" + rec.text) +
+      "&_t=" + Date.now();
+    try { const r = await fetch(url, { method: "GET", keepalive: true }); console.log("[dobit-reply] sent", reason, rec.requestId, r.status); }
+    catch (e) { console.warn("[dobit-reply] error", reason, rec.requestId, String(e)); }
+  }
+  chrome.runtime.onMessage.addListener((msg, sender) => {
+    if (!msg || msg.type !== MSG || !sender || !sender.tab) return;
+    const tabId = sender.tab.id;
+    if (msg.data && msg.data.requestId && msg.data.text) {
+      setRec(tabId, { requestId: String(msg.data.requestId), city: String(msg.data.city || ""), text: String(msg.data.text), url: normUrl((sender.tab && sender.tab.url) || "") });
+    } else {
+      delRec(tabId);
+    }
+  });
+  chrome.webNavigation.onCommitted.addListener(async (d) => {
+    if (d.frameId !== 0) return;
+    const rec = await getRec(d.tabId);
+    if (!rec) return;
+    if (d.transitionType === "reload") return;                        // перезагрузка — не шлём
+    if (normUrl(d.url) === rec.url && RE_REQUEST.test(d.url)) return; // та же заявка — не шлём
+    await delRec(d.tabId);
+    await sendReply(rec, "navigate");
+  });
+  chrome.tabs.onRemoved.addListener(async (tabId) => {
+    const rec = await getRec(tabId);
+    if (!rec) return;
+    await delRec(tabId);
+    await sendReply(rec, "close");
+  });
+})();
+
 /* ============================================================
  * АВТО-ОБНОВЛЕНИЕ РАСШИРЕНИЯ С GITHUB (self-reload)
  * Фоновая PowerShell-задача обновляет ФАЙЛЫ расширения на диске с GitHub.

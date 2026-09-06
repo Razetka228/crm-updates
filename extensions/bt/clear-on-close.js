@@ -39,3 +39,30 @@
     setInterval(push, 700);
     window.addEventListener("pagehide", push);
 })();
+
+// «Добить» + уход с заявки на уточнении → городу «Клиент возможно свяжется позже» (реплей на ОТВЕТ
+// согласования по этой заявке). Триггер — ЗАКРЫТИЕ вкладки / уход со страницы (НЕ смена статуса!),
+// поэтому сам запрос шлёт фон (background.js) с keepalive — переживает закрытие. Здесь РЕГИСТРИРУЕМ во
+// фоне «взведён/снят»: статус + служебный комментарий + город читаем прямо из DOM (изолир. мир видит DOM).
+(function dobitReplyOnClose() {
+    "use strict";
+    var MSG = "crm-dobit-reply";
+    var TEXT = "Клиент возможно свяжется позже";
+    var last = undefined;
+    function reqId() { try { var q = (new URL(location.href).searchParams.get("id") || ""); return /^\d+$/.test(q) ? q : ""; } catch (e) { return ""; } }
+    function statusText() { var s = ""; try { var b = document.querySelector(".crm-status-badge .badge-text, .crm-status-badge"); s = (b && (b.textContent || "")) || ""; } catch (e) {} return String(s).toLowerCase().replace(/\s+/g, " "); }
+    function svcComment() { try { var el = document.querySelector('textarea[name="CustomerRequest[comments_service]"], #customerrequest-comments_service, textarea[name*="comments_service"]'); return el ? String(el.value || "") : ""; } catch (e) { return ""; } }
+    function reqCity() { try { var el = document.getElementById("select2-customerrequest-city_id-container"); if (el) { var c = String(el.textContent || "").trim(); if (c.indexOf("(") !== -1) c = c.split("(")[0].trim(); if (c && !/^выбер/i.test(c)) return c; } var s = document.querySelector('select[name="CustomerRequest[city_id]"], #customerrequest-city_id'); if (s && s.options && s.options[s.selectedIndex]) { var c2 = String(s.options[s.selectedIndex].text || "").trim(); if (c2.indexOf("(") !== -1) c2 = c2.split("(")[0].trim(); if (c2 && !/^выбер/i.test(c2)) return c2; } } catch (e) {} return ""; }
+    function push() {
+        var rid = reqId();
+        var on = !!rid && statusText().indexOf("уточнен") !== -1 && svcComment().toLowerCase().indexOf("добить") !== -1;
+        var data = on ? { requestId: rid, city: reqCity(), text: TEXT } : null;
+        var key = data ? JSON.stringify(data) : "OFF";   // "OFF" — снят; шлём И на старте/перезагрузке, чтобы СБРОСИТЬ протухшую регистрацию (создал/неоформлено → статус уже не «уточнение»)
+        if (key === last) return;
+        last = key;
+        try { chrome.runtime.sendMessage({ type: MSG, data: data }); } catch (e) {}
+    }
+    push();
+    setInterval(push, 700);
+    window.addEventListener("pagehide", push);
+})();
