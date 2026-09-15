@@ -218,7 +218,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
  * ============================================================ */
 (() => {
   "use strict";
-  const RE_REQ_UPDATE = //admin/domain/customer-request/update/i;
+  const RE_REQ_UPDATE = new RegExp("/admin/domain/customer-request/update", "i");
   function reqIdOf(u) { try { return new URL(u).searchParams.get("id") || ""; } catch (e) { return ""; } }
 
   chrome.webNavigation.onCommitted.addListener(async (d) => {

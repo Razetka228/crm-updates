@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
 // @name         CRM Create v11.1 Latest (UI Replace)412412
 // @namespace    mnc-lead-centre-ui
-// @version      1.0.1363
+// @version      1.0.1365
 // @description  Полная замена внешнего вида страницы создания заявки
 // @match        https://mnc-lead-centre.ru/admin/domain/customer-request/create*
 // @match        https://mnc-lead-centre.ru/admin/domain/customer-request/update*
@@ -2341,7 +2341,7 @@ function tmSyncCreatePhoneCallBtn(input){
     // На модерации телефон — ТОЛЬКО просмотр: поле принудительно readonly, но кнопку звонка
     // показываем (серую при неполном номере — частый случай «модерка без полного номера»).
     var modView=false; try{modView=window.__tmIsModerationMode===true;}catch(_m){}
-    if(modView&&!input.hasAttribute('readonly')){try{input.setAttribute('readonly','');}catch(_r){}}
+    var userAdded=false; try{userAdded=!!(input.dataset&&input.dataset.tmAddedByUser==='1');}catch(_ua){} /* moderation: operator-added phone slot (Dobavit nomer) stays editable; existing saved numbers are view-only via renderModerationReadonlyPhones */ if(modView){ if(userAdded){ try{input.readOnly=false;input.removeAttribute('readonly');}catch(_r0){} } else if(!input.hasAttribute('readonly')){ try{input.setAttribute('readonly','');}catch(_r){} } }
     var btn=existing;
     if(!btn){
       btn=document.createElement('a');
@@ -9061,16 +9061,16 @@ function switchSpecialCityToAbakanForNotFormalized(){
 }
 // ── Модерация: «Не оформлено» → авто-заполнение города + типа «прочая» + времени (+1 час) ──
 // ТОЛЬКО на модерации (вызывается из _openNfDrop при kind==='nf').
-// Город: если пустой ИЛИ спец (test/КЦ/Москва/СПб — нельзя закрыть) → Абакан (кп/мнч) / Анапа (бт).
+// Город: если пустой ИЛИ спец (КЦ/Москва/СПб — нельзя закрыть) → Test (все направления).
 // Тип/время в базе доступны только ПОСЛЕ города → ставим асинхронно с поллингом (переживает depdrop).
 function tmModerationCloseCityName(){
-  return location.hostname.indexOf('bt-lead-centre.ru')!==-1?'Анапа':'Абакан';
+  return 'Test';
 }
 // Город пустой/«Выберите»/спец (нельзя закрыть заявку) → надо заменить на Абакан/Анапу.
 function tmModerationCityIsSpecialOrEmpty(){
   try{
     var c=String(getUiCityLabelForStatusBadge()||'').replace(/\s+/g,' ').trim().toLowerCase().replace(/ё/g,'е');
-    return (c===''||c.indexOf('выбер')!==-1||['test','кц','москва','москва кц','санкт-петербург','екатеринбург','новосибирск'].indexOf(c)!==-1);
+    return (c===''||c.indexOf('выбер')!==-1||['кц','москва','москва кц','санкт-петербург','екатеринбург','новосибирск'].indexOf(c)!==-1);
   }catch(_){return false;}
 }
 // Строго МОДЕРАЦИЯ (не уточнение): бейдж crm-status-moderation / текст «модерац», при этом НЕ «уточнен».
@@ -9146,7 +9146,7 @@ function tmModerationApplyProchayaType(){
     var sel=doc&&(doc.getElementById('customerrequest-appliance_type_id')||doc.querySelector('select[name="CustomerRequest[appliance_type_id]"]'));
     if(!sel||!sel.options||sel.options.length<2)return false;
     var val='';
-    for(var i=0;i<sel.options.length;i++){if(norm(sel.options[i].text)==='прочая'){val=String(sel.options[i].value||'');break;}}
+    var TYPE=(location.hostname.indexOf('kp-lead-centre.ru')!==-1)?'Компьютер/Ноутбук/Моноблок/Отдельные комплектующие от ПК':'прочая';var TYPEN=norm(TYPE);for(var i=0;i<sel.options.length;i++){if(norm(sel.options[i].text)===TYPEN){val=String(sel.options[i].value||'');break;}}
     if(!val)return false;
     if(String(sel.value||'')!==val){
       sel.value=val;
@@ -9154,8 +9154,8 @@ function tmModerationApplyProchayaType(){
       try{var w=doc.defaultView||window;if(w&&w.$&&w.$(sel).length)w.$(sel).trigger('change');}catch(_){}
     }
     var at=document.getElementById('appTypeInput');
-    if(at&&norm(at.value)!=='прочая')at.value='прочая';
-    try{if(typeof syncSubByText==='function')syncSubByText('прочая');}catch(_){}
+    if(at&&norm(at.value)!==TYPEN)at.value=TYPE;
+    try{if(typeof syncSubByText==='function')syncSubByText(TYPE);}catch(_){}
     return String(sel.value||'')===val;
   }catch(_){return false;}
 }
