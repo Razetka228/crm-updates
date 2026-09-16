@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
 // @name         CRM Create v11.1 Latest (UI Replace)412412
 // @namespace    kp-lead-centre-ui
-// @version      1.0.1383
+// @version      1.0.1385
 // @description  Полная замена внешнего вида страницы создания заявки
 // @match        https://kp-lead-centre.ru/admin/domain/customer-request/create*
 // @match        https://kp-lead-centre.ru/admin/domain/customer-request/update*
@@ -9098,14 +9098,14 @@ function tmModerationEnsureCloseableCity(){
     return 'set';
   }catch(_){return 'fail';}
 }
-function tmModerationApplyProchayaType(){
+function tmModerationApplyProchayaType(typeText){
   try{
     var norm=function(v){return String(v||'').replace(/\s+/g,' ').trim().toLowerCase().replace(/ё/g,'е');};
     var doc=getBridgeDoc();
     var sel=doc&&(doc.getElementById('customerrequest-appliance_type_id')||doc.querySelector('select[name="CustomerRequest[appliance_type_id]"]'));
     if(!sel||!sel.options||sel.options.length<2)return false;
     var val='';
-    var TYPE=(location.hostname.indexOf('kp-lead-centre.ru')!==-1)?'Компьютер/Ноутбук/Моноблок/Отдельные комплектующие от ПК':'прочая';var TYPEN=norm(TYPE);for(var i=0;i<sel.options.length;i++){if(norm(sel.options[i].text)===TYPEN){val=String(sel.options[i].value||'');break;}}
+    var TYPEN=norm(typeText);for(var i=0;i<sel.options.length;i++){if(norm(sel.options[i].text)===TYPEN){val=String(sel.options[i].value||'');break;}}
     if(!val)return false;
     if(String(sel.value||'')!==val){
       sel.value=val;
@@ -9113,9 +9113,9 @@ function tmModerationApplyProchayaType(){
       try{var w=doc.defaultView||window;if(w&&w.$&&w.$(sel).length)w.$(sel).trigger('change');}catch(_){}
     }
     var at=document.getElementById('appTypeInput');
-    if(at&&norm(at.value)!==TYPEN)at.value=TYPE;
-    try{if(typeof syncSubByText==='function')syncSubByText(TYPE);}catch(_){}
-    return String(sel.value||'')===val;
+    var _realSel=document.querySelector('select[name="CustomerRequest[appliance_type_id]"]');var _realOk=null;try{if(_realSel&&_realSel.options&&_realSel.options.length>1){var _rv='';for(var _ri=0;_ri<_realSel.options.length;_ri++){if(norm(_realSel.options[_ri].text)===TYPEN){_rv=String(_realSel.options[_ri].value||'');break;}}if(_rv){if(String(_realSel.value||'')!==_rv){_realSel.value=_rv;try{_realSel.dispatchEvent(new Event('change',{bubbles:true}));}catch(_e1){}try{if(window.$&&window.$(_realSel).length)window.$(_realSel).trigger('change');}catch(_e2){}}_realOk=(String(_realSel.value||'')===_rv);}else{_realOk=false;}}}catch(_er){}if(at&&norm(at.value)!==TYPEN)at.value=typeText;
+    try{if(typeof syncSubByText==='function')syncSubByText(typeText);}catch(_){}
+    return _realSel?(_realOk===true):(String(sel.value||'')===val);
   }catch(_){return false;}
 }
 function tmModerationNfAutofill(done){
@@ -9124,7 +9124,7 @@ function tmModerationNfAutofill(done){
   try{
     var t0=Date.now();
     var LIMIT=4200;
-    var lastTimeTry=0;
+    var lastTimeTry=0;var _hadTech=false;try{_hadTech=isTechniqueSelectedUi();}catch(_ht){}var _typeSince=0;
     (function poll(){
       // 1. Город: пока спец/пустой («Выберите») — повторяем установку Абакан/Анапы.
       //    Ретрай нужен: при пустом городе опции списка догружаются из бриджа не сразу,
@@ -9132,8 +9132,8 @@ function tmModerationNfAutofill(done){
       if(tmModerationCityIsSpecialOrEmpty()){try{tmModerationEnsureCloseableCity();}catch(_){}}
       var cityOk=false,typeOk=false,timeOk=false;
       try{cityOk=isCitySelectedUi()&&!tmModerationCityIsSpecialOrEmpty();}catch(_){}
-      // Техника: уже выбрана (любая) → НЕ трогаем; не выбрана → ставим «прочая» (после города).
-      try{ if(isTechniqueSelectedUi())typeOk=true; else typeOk=cityOk?tmModerationApplyProchayaType():false; }catch(_){}
+      // Тип форсим ТОЛЬКО когда город стал Test — перезаписываем даже выбранную технику (смартфон и т.п.); нормальный город → тип НЕ трогаем.
+      try{ var _cityIsTest=false;try{_cityIsTest=(String(getUiCityLabelForStatusBadge()||'').replace(/\s+/g,' ').trim().toLowerCase().replace(/ё/g,'е')==='test');}catch(_ct){} var _isKpNf=(location.hostname.indexOf('kp-lead-centre.ru')!==-1); if(!_cityIsTest){ if(_hadTech){typeOk=true;} else { typeOk=cityOk?tmModerationApplyProchayaType('Прочая'):false; } } else { var _tt=_isKpNf?'Компьютер/Ноутбук/Моноблок/Отдельные комплектующие от ПК':'Прочая'; var _ap=cityOk?tmModerationApplyProchayaType(_tt):false; if(_ap){if(!_typeSince)_typeSince=Date.now();}else{_typeSince=0;} typeOk=_ap&&(Date.now()-_typeSince>=650); } }catch(_){typeOk=false;}
       try{timeOk=!isBridgeRequestTimeEmptyUi();}catch(_){}
       // Время только ПОСЛЕ города и типа; повторяем нажатие «+1 час», пока не проставится.
       // (нативная кнопка иногда «нажимается», но база не успела досчитать время — тогда ретрай.)
