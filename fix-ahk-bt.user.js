@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
 // @name         Фикс базы + ахк (БТ)
 // @namespace    http://tampermonkey.net/
-// @version      29.15
+// @version      29.17
 // @description  ОБЪЕДИНЕННЫЙ СКРИПТ: + Фикс кнопки "Применить фильтр" + Кастомное меню услуг + Логика кнопок (create/update)
 // @author       кто прочитатет тот умрет
 // @match        https://bt-lead-centre.ru/admin/domain/customer-request/update*
@@ -38,8 +38,11 @@
     console.log('[Фикс БТ city-number 28.2] getCity/getCityFromRequest/normalizeTelegramTargetCity больше НЕ режут цифры — полное имя города с номером (future-proof, номерных городов на БТ сейчас нет)');
     console.log('[Фикс БТ partner-comment 28.3] lastPartnerText сбрасывается при смене партнёра — инфо партнёра снова дописывается в комментарий на повторной заявке (баг «редко не переносится»)');
     console.log('[Фикс БТ 28.4] партнёр 759 добавлен в список авто-«Отзыв» (REVIEW_SHOWN_ALLOWED)');
+    console.log('[Фикс БТ 29.17] партнёр 652 добавлен в авто-«Отзыв» (REVIEW_SHOWN_ALLOWED + _MANUAL — create и update)');
+    console.log('[Фикс БТ 29.17] авто-«Отзыв» ставит ПЛАШКУ #flagReview (её читает пред-сабмит) — отзыв больше не затирается при сохранении');
     console.log('[Фикс БТ 28.8] интеграция с TG-клиентом: закрыл/создал заявку → авто-реплей на ОТВЕТ города по согласованию (согласование помечается #REQ<id>#, привязка mid→заявка на клиенте; закрытие «Клиент отказался»/«Помощь не актуальна» + «Создать»; веер СПб/МСК исключён)');
     console.log('[Фикс БТ 29.14] согласование метится #REQ<id>@<база># — клик по уведомлению об ответе города открывает заявку РОВНО в её базе (kp/bt/mnc из хоста CRM, не угадывается по названию чата)');
+    console.log('[Фикс БТ 29.16] статистика диспа: виджет «Заработано за сегодня» подхватывает данные из уже открытой статистики БЕЗ своего запроса к серверу — (1) кнопка «Статистика по диспетчерам» v8 кладёт таблицу в localStorage-хэндофф, виджет импортирует; (2) вручную открытая report-dispatcher/index снимается «даром». Целевой день = сегодня.');
     // ===== ВРЕМЕННАЯ ДИАГНОСТИКА ПЕРЕНОСА АДРЕСА (2026-07-12) — ВЕРХНИЙ УРОВЕНЬ =====
     // На верхнем уровне (до host-гейта yandex), чтобы работала И на картах, И на вкладке заявки.
     // Самодостаточная панель (не консоль) с кнопкой «Копировать». Убрать после отладки.
@@ -28940,9 +28943,14 @@ function loadAuditManagement() {
     }
 
     function loadSummaryQuickFilters() {
-        if (window.location.pathname !== '/admin/domain/customer-request/index') return;
+        // Виджет статистики строится только на главной, НО код нужен и на вручную открытой
+        // report-dispatcher/index — там снимаем уже отрисованную таблицу в кэш виджета (харвест
+        // внизу, в точке загрузки), не делая отдельного тяжёлого запроса к серверу.
+        const __tmStatsIsIndexPage = window.location.pathname === '/admin/domain/customer-request/index';
+        const __tmStatsIsReportPage = window.location.pathname === '/admin/domain/report-dispatcher/index';
+        if (!__tmStatsIsIndexPage && !__tmStatsIsReportPage) return;
         const currentUrl = new URL(window.location.href);
-        if (currentUrl.searchParams.get('__view-mode') === '4') return;
+        if (__tmStatsIsIndexPage && currentUrl.searchParams.get('__view-mode') === '4') return;
 
         const WIDGET_ID = 'tm-summary-quick-filters';
         const STATS_WIDGET_ID = 'tm-dispatcher-stats-box';
@@ -31501,6 +31509,22 @@ function loadAuditManagement() {
             void requestMonthlyCityStat();
             requestPositionUpdate();
 
+            // Подхват хэндоффа от кнопки «Статистика по диспетчерам» (v8): диспетчер сам
+            // открыл статистику → v8 положил таблицу в localStorage → импортируем в кэш виджета
+            // и перерисовываем. Лёгкий поллинг (только чтение localStorage), т.к. v8 и Фикс+ахк
+            // в РАЗНЫХ мирах одной вкладки — событие storage между ними не приходит.
+            const pumpHandoff = () => {
+                if (document.visibilityState !== 'visible') return;
+                if (importWidgetStatsFromV8Handoff()) {
+                    const fresh = readCachedDispatcherStatsFresh();
+                    if (fresh) { statsData = fresh; statsLoadState = 'ready'; renderStatsWidget(); requestPositionUpdate(); }
+                }
+            };
+            pumpHandoff();
+            if (!window.__tmStatsHandoffPollTimer) {
+                window.__tmStatsHandoffPollTimer = window.setInterval(pumpHandoff, 4000);
+            }
+
             window.addEventListener('resize', requestPositionUpdate);
             window.addEventListener('scroll', requestPositionUpdate, true);
 
@@ -31587,6 +31611,107 @@ function loadAuditManagement() {
                     subtree: true
                 });
             }
+        }
+
+        // ХАРВЕСТ статистики с ВРУЧНУЮ открытой страницы report-dispatcher/index.
+        // report-dispatcher — ТЯЖЁЛЫЙ серверный отчёт (разрабы СРМ жаловались на нагрузку),
+        // поэтому виджет его сам без нужды не фетчит (кэш-гейт свежести). Но если диспетчер
+        // САМ зашёл посмотреть статистику — таблица уже отрисована сервером «даром»: снимаем
+        // свою строку и кладём в тот же кэш виджета. Вернувшись на главную, виджет прочитает
+        // свежий кэш (readCachedDispatcherStatsFresh) и покажет цифры БЕЗ отдельного запроса
+        // к report-dispatcher. Ноль лишней нагрузки на сервер.
+        function normHarvestDate(value) {
+            const s = String(value || '').trim();
+            let m = s.match(/^(\d{2})-(\d{2})-(\d{4})$/); if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+            m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);      if (m) return `${m[3]}-${m[2]}-${m[1]}`;
+            m = s.match(/^(\d{2})\.(\d{2})\.(\d{4})$/);    if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+            return '';
+        }
+        function getOpenReportPageDate() {
+            const sp = currentUrl.searchParams;
+            let from = sp.get('ReportRequestSearch[date_from]') || '';
+            let till = sp.get('ReportRequestSearch[date_till]') || '';
+            if (!from) { const el = document.querySelector('[name="ReportRequestSearch[date_from]"]'); if (el) from = el.value; }
+            if (!till) { const el = document.querySelector('[name="ReportRequestSearch[date_till]"]'); if (el) till = el.value; }
+            return { from: normHarvestDate(from), till: normHarvestDate(till) };
+        }
+        function harvestDispatcherStatsFromOpenReportPage() {
+            try {
+                // Только ОДИНОЧНЫЙ день == целевой день виджета. В ночном окне 4:00–7:59 отчёт
+                // разбит на 2 календарные даты (вчера+сегодня, виджет их суммирует) — тогда не
+                // харвестим, чтобы не положить в кэш половину смены.
+                const lookup = getDispatcherStatsLookupDates();
+                if (lookup.length !== 1) return false;
+                const want = formatReportDate(lookup[0]);
+                const pageDate = getOpenReportPageDate();
+                if (!pageDate.from || !pageDate.till) return false;                 // дату страницы не подтвердить — НЕ трогаем кэш
+                if (pageDate.from !== want || pageDate.till !== want) return false; // открыт не сегодняшний одиночный день
+
+                const targetRow = findDispatcherStatsRow(document);
+                if (!targetRow) return false;                                       // строки диспа ещё нет / нет данных
+                const cells = targetRow.querySelectorAll('td');
+                const nameCellText = String(targetRow.querySelector('td:first-child')?.textContent || '').trim();
+                const accepted = (cells[1]?.textContent || '').trim() || '0';
+                const canceled = (cells[2]?.textContent || '').trim() || '0';
+                const cancelPercent = parseDispatcherStatsPercent(cells[4]?.textContent || '0');
+                const calls = (cells[6]?.textContent || '').trim() || '0';
+                if (!accepted && !canceled && !calls) return false;
+
+                // Пишем через штатную запись — тот же скоуп (диспетчер+дата) и savedAt, что читает виджет.
+                writeCachedDispatcherStats({ accepted, canceled, cancelPercent, calls, dispatcherClass: getDispatcherClassValue(nameCellText) });
+                console.log(`[Фикс] статистика: снята с открытой вручную report-dispatcher (${want}, принято ${accepted}/отмен ${canceled}) → кэш виджета обновлён без запроса к серверу`);
+                return true;
+            } catch (error) { return false; }
+        }
+
+        // ИМПОРТ из хэндоффа v8-расширения. Кнопка «Статистика по диспетчерам» (v8) сама фетчит
+        // report-dispatcher и кладёт таблицу в localStorage['tm-dispatcher-stats-report-handoff-v1'].
+        // Здесь на ГЛАВНОЙ забираем её (свой парсер findDispatcherStatsRow + свой скоуп кэша — без
+        // дрейфа имени/даты между скриптами) и кладём в кэш виджета. Виджет показывает свежие цифры
+        // БЕЗ своего запроса к серверу — переиспользуем фетч, который диспетчер и так сделал.
+        function importWidgetStatsFromV8Handoff() {
+            try {
+                const raw = localStorage.getItem('tm-dispatcher-stats-report-handoff-v1');
+                if (!raw) return false;
+                const h = JSON.parse(raw);
+                if (!h || !h.tableHtml || !h.savedAt) return false;
+                if (Date.now() - h.savedAt >= 600000) return false;               // старше 10 мин — не берём
+                if (window.__tmStatsHandoffImportedAt === h.savedAt) return false; // этот хэндофф уже импортирован
+                // date_from фетча v8 (начало смены) должен совпасть с целевым днём виджета —
+                // иначе открыт исторический/месячный фильтр, а не «сегодня». Тогда пропускаем.
+                let from = '';
+                try { from = new URL(h.url, location.origin).searchParams.get('ReportRequestSearch[date_from]') || ''; } catch (_u) {}
+                if (normHarvestDate(from) !== formatReportDate(getDispatcherStatsDate())) return false;
+                const doc = new DOMParser().parseFromString(String(h.tableHtml), 'text/html');
+                const targetRow = findDispatcherStatsRow(doc);
+                if (!targetRow) return false;
+                const cells = targetRow.querySelectorAll('td');
+                const nameCellText = String(targetRow.querySelector('td:first-child')?.textContent || '').trim();
+                const accepted = (cells[1]?.textContent || '').trim() || '0';
+                const canceled = (cells[2]?.textContent || '').trim() || '0';
+                const cancelPercent = parseDispatcherStatsPercent(cells[4]?.textContent || '0');
+                const calls = (cells[6]?.textContent || '').trim() || '0';
+                if (!accepted && !canceled && !calls) return false;
+                writeCachedDispatcherStats({ accepted, canceled, cancelPercent, calls, dispatcherClass: getDispatcherClassValue(nameCellText) });
+                window.__tmStatsHandoffImportedAt = h.savedAt;
+                console.log(`[Фикс] статистика: импортирована из «Статистики по диспетчерам» (v8, ${normHarvestDate(from)}, принято ${accepted}/отмен ${canceled}) → виджет обновлён без запроса к серверу`);
+                return true;
+            } catch (_e) { return false; }
+        }
+
+        if (__tmStatsIsReportPage) {
+            const runHarvest = () => {
+                if (harvestDispatcherStatsFromOpenReportPage()) return;
+                // таблица/строка могли не успеть отрисоваться — пара мягких ретраев (без сети)
+                let tries = 0;
+                const iv = window.setInterval(() => {
+                    tries++;
+                    if (harvestDispatcherStatsFromOpenReportPage() || tries >= 6) window.clearInterval(iv);
+                }, 700);
+            };
+            if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', runHarvest);
+            else runHarvest();
+            return;
         }
 
         if (document.readyState === 'loading') {
@@ -41409,7 +41534,7 @@ function loadPartnerReviewLogic() {
         ].join(',');
         const PARTNER_TEXT_BLOCK_MANUAL = '#partnerCommentBlock';
         const REVIEW_HIDDEN_ALLOWED_MANUAL = new Set(['723', '773', '007', '7']);
-        const REVIEW_SHOWN_ALLOWED_MANUAL = new Set(['723', '007', '7', '639', '699', '222', '685', '340', '701', '748']);
+        const REVIEW_SHOWN_ALLOWED_MANUAL = new Set(['723', '007', '7', '639', '699', '222', '685', '340', '701', '748', '652']);
         const COMMENT_HIDDEN_ALLOWED_MANUAL = new Set(['723', '773']);
         const COMMENT_SHOWN_ALLOWED_MANUAL = new Set(['723']);
 
@@ -41520,6 +41645,8 @@ function loadPartnerReviewLogic() {
         }
 
         function setManualReviewChecked() {
+            var __pill = document.getElementById('flagReview');
+            if (__pill) { if (!__pill.classList.contains('on')) __pill.click(); return; }
             const label = findManualReviewLabel();
             const cb = document.querySelector(REVIEW_CHECKBOX_MANUAL) || findManualReviewCheckboxByLabel(label);
 
@@ -41691,7 +41818,7 @@ function loadPartnerReviewLogic() {
 
     // Отзыв: 723 и 007
     const REVIEW_HIDDEN_ALLOWED = new Set(['723', '773', '007', '7']);
-    const REVIEW_SHOWN_ALLOWED = new Set(['723', '007', '7', '639', '699', '222', '685', '340', '701', '748', '759']);
+    const REVIEW_SHOWN_ALLOWED = new Set(['723', '007', '7', '639', '699', '222', '685', '340', '701', '748', '759', '652']);
 
     // Комментарий: только 723
     const COMMENT_HIDDEN_ALLOWED = new Set(['723', '773']);
@@ -41738,6 +41865,8 @@ function loadPartnerReviewLogic() {
     }
 
     function setReviewChecked() {
+        var __pill = document.getElementById('flagReview');
+        if (__pill) { if (!__pill.classList.contains('on')) { __pill.click(); console.log('[TM] Отзыв включён (плашка flagReview)'); } return; }
         const cb = document.querySelector(REVIEW_CHECKBOX);
         if (!cb) return;
         if (!cb.checked) {

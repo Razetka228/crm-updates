@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
 // @name         CRM Create v11.1 Latest (UI Replace)412412
 // @namespace    kp-lead-centre-ui
-// @version      1.0.1385
+// @version      1.0.1386
 // @description  Полная замена внешнего вида страницы создания заявки
 // @match        https://kp-lead-centre.ru/admin/domain/customer-request/create*
 // @match        https://kp-lead-centre.ru/admin/domain/customer-request/update*
@@ -11541,7 +11541,7 @@ function flushPendingBridgeFlags(doc){
 }
 function syncFlagToBridge(fieldId,isOn){
   try{
-    rememberPendingBridgeFlag(fieldId,isOn);
+    rememberPendingBridgeFlag(fieldId,isOn); try{var _fnm='CustomerRequest['+String(fieldId||'').replace(/^customerrequest-/,'')+']';var _realCb=document.querySelector('input[type="checkbox"][name="'+_fnm+'"]');if(_realCb&&_realCb.checked!==!!isOn){_realCb.checked=!!isOn;try{_realCb.dispatchEvent(new Event('change',{bubbles:true}));}catch(_rc1){}try{_realCb.dispatchEvent(new Event('input',{bubbles:true}));}catch(_rc2){}}}catch(_realCbE){}
     var doc=getBridgeDoc();
     if(!doc)return false;
     var cb=doc.getElementById(fieldId);
